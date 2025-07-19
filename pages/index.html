@@ -6,37 +6,34 @@
   <title>AprendeYa</title>
   <link href="/styles/tailwind.css" rel="stylesheet" />
 </head>
-<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
-  <div id="app" class="bg-white rounded-lg shadow-lg max-w-3xl w-full p-8">
+<body class="bg-gray-100 p-4">
+  <div id="app" class="max-w-xl mx-auto">
 
-    <h1 class="text-3xl font-bold text-center mb-8 text-gray-800">aprendeya</h1>
+    <h1 class="text-2xl mb-4 font-bold text-center">AprendeYa</h1>
 
-    <div id="login-register" class="max-w-md mx-auto">
-      <input id="email" type="email" placeholder="email" class="border border-gray-300 rounded-md p-3 w-full mb-4 focus:outline-blue-500" />
-      <input id="password" type="password" placeholder="contraseña" class="border border-gray-300 rounded-md p-3 w-full mb-4 focus:outline-blue-500" />
-      <button id="btn-login" class="bg-blue-600 text-white rounded-md w-full py-3 font-semibold hover:bg-blue-700 transition">iniciar sesion / registrarse</button>
-      <p id="error-msg" class="text-red-500 mt-2 text-center"></p>
+    <div id="login-register" class="mb-6">
+      <input id="email" type="email" placeholder="email" class="border p-2 w-full mb-2" />
+      <input id="password" type="password" placeholder="contraseña" class="border p-2 w-full mb-2" />
+      <button id="btn-login" class="bg-blue-500 text-white p-2 w-full rounded">iniciar sesion / registrarse</button>
+      <p id="error-msg" class="text-red-500 mt-2"></p>
     </div>
 
     <div id="user-panel" class="hidden">
-      <p class="text-gray-700 mb-4 text-center">iniciado como <span id="user-email" class="font-semibold"></span></p>
+      <p>Iniciado como <span id="user-email"></span></p>
 
-      <div id="admin-panel" class="hidden bg-gray-50 p-6 rounded-md shadow-inner max-w-md mx-auto mb-6">
-        <h2 class="font-semibold text-xl mb-4 text-gray-800">agregar curso</h2>
-        <input id="curso-titulo" placeholder="titulo" class="border border-gray-300 rounded-md p-3 w-full mb-3 focus:outline-blue-500" />
-        <input id="curso-nivel" placeholder="nivel (principiante, intermedio, avanzado)" class="border border-gray-300 rounded-md p-3 w-full mb-3 focus:outline-blue-500" />
-        <textarea id="curso-descripcion" placeholder="descripcion" class="border border-gray-300 rounded-md p-3 w-full mb-3 resize-none focus:outline-blue-500" rows="3"></textarea>
-        <input id="curso-link" placeholder="link del curso" class="border border-gray-300 rounded-md p-3 w-full mb-4 focus:outline-blue-500" />
-        <button id="btn-agregar" class="bg-green-600 text-white rounded-md w-full py-3 font-semibold hover:bg-green-700 transition">agregar curso</button>
-        <p id="msg-curso" class="text-green-600 mt-2 text-center"></p>
+      <div id="admin-panel" class="hidden mt-4">
+        <h2 class="font-semibold mb-2">Agregar curso</h2>
+        <input id="curso-titulo" placeholder="titulo" class="border p-2 w-full mb-2" />
+        <input id="curso-nivel" placeholder="nivel (principiante, intermedio, avanzado)" class="border p-2 w-full mb-2" />
+        <textarea id="curso-descripcion" placeholder="descripcion" class="border p-2 w-full mb-2"></textarea>
+        <input id="curso-link" placeholder="link del curso" class="border p-2 w-full mb-2" />
+        <button id="btn-agregar" class="bg-green-500 text-white p-2 w-full rounded">agregar curso</button>
+        <p id="msg-curso" class="text-green-600 mt-2"></p>
       </div>
 
-      <h2 class="font-semibold text-2xl mb-4 text-gray-800 text-center">cursos disponibles</h2>
-      <ul id="lista-cursos" class="max-w-3xl mx-auto space-y-4">
-        <!-- cursos aqui -->
-      </ul>
-
-      <button id="btn-logout" class="mt-8 bg-red-600 text-white rounded-md w-full py-3 font-semibold hover:bg-red-700 transition">cerrar sesion</button>
+      <h2 class="font-semibold mt-6 mb-2">Cursos disponibles</h2>
+      <ul id="lista-cursos" class="list-disc list-inside"></ul>
+      <button id="btn-logout" class="mt-4 bg-red-500 text-white p-2 w-full rounded">cerrar sesion</button>
     </div>
 
   </div>
@@ -71,6 +68,7 @@
       }
 
       try {
+        // primero intentar login
         let res = await fetch(`${apiUrl}/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -78,6 +76,7 @@
         })
 
         if (res.status === 400) {
+          // si usuario no existe, registrar
           res = await fetch(`${apiUrl}/register`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -88,6 +87,7 @@
             mostrarError(err.error || 'error al registrar')
             return
           }
+          // luego loguear al usuario registrado
           res = await fetch(`${apiUrl}/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -115,9 +115,11 @@
       const token = authClient.getToken()
       if (!token) return logout()
 
+      // decodificar token para obtener email (simple, sin libreria)
       const payload = JSON.parse(atob(token.split('.')[1]))
       userEmailSpan.textContent = payload.email
 
+      // si es admin mostrar panel admin
       if (payload.email === 'admin@aprendeya.com') {
         adminPanel.classList.remove('hidden')
       } else {
@@ -136,13 +138,7 @@
         lista.innerHTML = ''
         cursos.forEach(curso => {
           const li = document.createElement('li')
-          li.className = "bg-white p-4 rounded shadow hover:shadow-md transition"
-          li.innerHTML = `
-            <h3 class="font-bold text-lg text-gray-800">${curso.titulo}</h3>
-            <p class="text-sm text-gray-500 mb-1">nivel: ${curso.nivel} | subido por: ${curso.creador}</p>
-            <p class="text-gray-700 mb-2">${curso.descripcion}</p>
-            <a href="${curso.link}" target="_blank" class="text-blue-600 hover:underline">ver curso</a>
-          `
+          li.innerHTML = `<strong>${curso.titulo}</strong> (${curso.nivel}) - subido por ${curso.creador}<br>${curso.descripcion}<br><a href="${curso.link}" target="_blank" class="text-blue-600 underline">ver curso</a>`
           lista.appendChild(li)
         })
       } catch {
@@ -198,6 +194,7 @@
     document.getElementById('btn-agregar').addEventListener('click', agregarCurso)
     document.getElementById('btn-logout').addEventListener('click', logout)
 
+    // al cargar pagina
     if (authClient.getToken()) mostrarUserPanel()
   </script>
 </body>
