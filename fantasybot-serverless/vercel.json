@@ -1,0 +1,42 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/*.py": {
+      "runtime": "@vercel/python@4.3.0",
+      "memory": 1024,
+      "maxDuration": 60,
+      "includeFiles": "fantasybot/**"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/dashboard",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        }
+      ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/tick",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}

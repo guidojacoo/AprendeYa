@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>FantasyBot · Panel</title>
+<style>
+  :root{
+    --page:#f6f7f9; --surface:#fff; --surface2:#fafbfc; --line:#eceef1;
+    --ink:#12131a; --ink2:#3a3d47; --muted:#6b6f7a;
+    --brand:#5e6ad2; --brand-d:#4f59c0; --brand-bg:#eef0fc;
+    --good:#1a7f52; --good-bg:#e7f4ec; --warn:#9a6b12; --warn-bg:#f9f2e2;
+    --bad:#bd423a; --bad-bg:#fbeceb;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sh:0 1px 2px rgba(18,25,50,.05),0 6px 20px -8px rgba(18,25,50,.12);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--ink);
+    font:14.5px/1.55 var(--sans);-webkit-font-smoothing:antialiased;
+    padding:24px 16px 48px}
+  .wrap{max-width:960px;margin:0 auto}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+    background:linear-gradient(150deg,#6b76e0,#4f59c0);color:#fff;font-weight:700}
+  h1{font-size:17px;margin:0;font-weight:650;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:12.5px}
+  .spacer{flex:1}
+  button{font:inherit;font-size:13px;font-weight:550;padding:7px 13px;border-radius:8px;
+    border:1px solid var(--line);background:var(--surface);color:var(--ink2);cursor:pointer}
+  button:hover{background:#f4f5f8}
+  button.primary{background:var(--brand);border-color:var(--brand-d);color:#fff}
+  button.primary:hover{background:var(--brand-d)}
+  button:disabled{opacity:.5;cursor:default}
+  .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));
+    margin-bottom:16px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;
+    padding:14px 15px;box-shadow:var(--sh)}
+  .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--muted);margin:0 0 8px;font-weight:650}
+  .big{font:600 21px/1.2 var(--mono);letter-spacing:-.02em}
+  .note{color:var(--muted);font-size:12.5px;margin-top:4px}
+  .pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;
+    font-size:11.5px;font-weight:600}
+  .ok{background:var(--good-bg);color:var(--good)}
+  .warn{background:var(--warn-bg);color:var(--warn)}
+  .bad{background:var(--bad-bg);color:var(--bad)}
+  .idle{background:var(--brand-bg);color:var(--brand-d)}
+  section{background:var(--surface);border:1px solid var(--line);border-radius:13px;
+    box-shadow:var(--sh);margin-bottom:14px;overflow:hidden}
+  section > h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--muted);margin:0;padding:12px 15px;border-bottom:1px solid var(--line);
+    font-weight:650}
+  .rows{max-height:380px;overflow:auto}
+  .row{display:flex;gap:11px;padding:9px 15px;border-bottom:1px solid #f4f5f8;
+    align-items:baseline;font-size:13.5px}
+  .row:last-child{border-bottom:0}
+  .t{font:11.5px/1.6 var(--mono);color:var(--muted);flex:none;width:126px}
+  .k{font:11px/1.6 var(--mono);flex:none;width:78px;color:var(--brand-d);font-weight:600}
+  .txt{flex:1;min-width:0}
+  .txt small{display:block;color:var(--muted);font-size:11.5px;
+    word-break:break-word;font-family:var(--mono)}
+  .empty{padding:16px 15px;color:var(--muted);font-size:13px}
+  #gate{max-width:400px;margin:12vh auto;background:var(--surface);
+    border:1px solid var(--line);border-radius:14px;padding:22px;box-shadow:var(--sh)}
+  #gate h1{margin-bottom:5px}
+  #gate input{width:100%;font:inherit;font-family:var(--mono);font-size:13px;
+    padding:9px 11px;margin:14px 0 12px;border:1px solid var(--line);border-radius:8px}
+  #gate input:focus{outline:2px solid var(--brand-bg);border-color:var(--brand)}
+  .err{color:var(--bad);font-size:12.5px;margin-top:9px;min-height:17px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--muted);padding:8px 15px;border-bottom:1px solid var(--line);font-weight:650}
+  td{padding:8px 15px;border-bottom:1px solid #f4f5f8}
+  tr:last-child td{border-bottom:0}
+  .num{font-family:var(--mono);text-align:right;white-space:nowrap}
+  @media(max-width:560px){
+    .t{width:92px} .k{width:62px}
+    th:nth-child(3),td:nth-child(3){display:none}
+  }
+</style>
+</head>
+<body>
+
+<div id="gate" hidden>
+  <h1>FantasyBot</h1>
+  <div class="sub">Pega el <code>BOT_CRON_SECRET</code> para abrir el panel.</div>
+  <input id="secret" type="password" placeholder="BOT_CRON_SECRET" autocomplete="off">
+  <button class="primary" id="enter" style="width:100%">Entrar</button>
+  <div class="err" id="gate-err"></div>
+  <div class="note" style="margin-top:12px">
+    Se guarda solo en esta pestaña (<code>sessionStorage</code>) y viaja como cabecera
+    <code>Authorization</code>. Nunca se escribe en el HTML ni se envía a terceros.
+  </div>
+</div>
+
+<div class="wrap" id="app" hidden>
+  <header>
+    <div class="logo">F</div>
+    <div>
+      <h1>FantasyBot</h1>
+      <div class="sub" id="sub">cargando…</div>
+    </div>
+    <div class="spacer"></div>
+    <button id="refresh">Actualizar</button>
+    <button class="primary" id="run">Forzar revisión</button>
+    <button id="logout">Salir</button>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Estado</h2>
+      <div><span class="pill idle" id="health">—</span></div>
+      <div class="note" id="health-note">—</div>
+    </div>
+    <div class="card">
+      <h2>Saldo</h2>
+      <div class="big" id="money">—</div>
+      <div class="note" id="formation">—</div>
+    </div>
+    <div class="card">
+      <h2>Última ejecución</h2>
+      <div class="big" id="last-run" style="font-size:16px">—</div>
+      <div class="note" id="last-run-note">—</div>
+    </div>
+    <div class="card">
+      <h2>Próxima acción</h2>
+      <div class="big" id="next" style="font-size:16px">—</div>
+      <div class="note" id="next-note">—</div>
+    </div>
+  </div>
+
+  <section>
+    <h2>Acciones programadas</h2>
+    <div id="pending"></div>
+  </section>
+
+  <section>
+    <h2>Plan de mercado</h2>
+    <div id="plan"></div>
+  </section>
+
+  <section>
+    <h2>Tareas pendientes</h2>
+    <div id="tasks"></div>
+  </section>
+
+  <section>
+    <h2>Eventos recientes</h2>
+    <div class="rows" id="events"></div>
+  </section>
+
+  <section>
+    <h2>Ejecuciones</h2>
+    <div id="executions"></div>
+  </section>
+</div>
+
+<script>
+const KEY = 'fantasybot.secret';
+const gate = document.getElementById('gate');
+const app  = document.getElementById('app');
+let secret = sessionStorage.getItem(KEY) || '';
+let timer = null;
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = n => (n === null || n === undefined || n === '') ? '—'
+  : Number(n).toLocaleString('es-ES') + ' €';
+
+function when(iso){
+  if(!iso) return '—';
+  const d = new Date(iso);
+  if(isNaN(d)) return String(iso);
+  return d.toLocaleString('es-ES', {day:'2-digit', month:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+function ago(iso){
+  if(!iso) return '';
+  const s = (Date.now() - new Date(iso).getTime())/1000;
+  if(isNaN(s)) return '';
+  if(s < 0) return 'en ' + rel(-s);
+  return 'hace ' + rel(s);
+}
+function rel(s){
+  if(s < 60) return Math.round(s)+'s';
+  if(s < 3600) return Math.round(s/60)+' min';
+  if(s < 86400) return Math.round(s/3600)+' h';
+  return Math.round(s/86400)+' d';
+}
+
+async function call(path, opts){
+  const res = await fetch(path, Object.assign({
+    headers: {'Authorization': 'Bearer ' + secret}
+  }, opts || {}));
+  if(res.status === 401){ throw new Error('unauthorized'); }
+  return res.json();
+}
+
+function rows(el, items, render, emptyText){
+  if(!items || !items.length){
+    el.innerHTML = '<div class="empty">' + esc(emptyText) + '</div>';
+    return;
+  }
+  el.innerHTML = items.map(render).join('');
+}
+
+function render(d){
+  const last = d.last_execution || {};
+  const failed = last.status === 'failed' || (last.summary && last.summary.ok === false);
+  const stale = last.started_at &&
+    (Date.now() - new Date(last.started_at).getTime()) > 20*60*1000;
+
+  const health = document.getElementById('health');
+  health.className = 'pill ' + (failed ? 'bad' : stale ? 'warn' : last.started_at ? 'ok' : 'idle');
+  health.textContent = failed ? 'con errores' : stale ? 'sin señal' :
+    last.started_at ? 'activo' : 'sin ejecuciones';
+  document.getElementById('health-note').textContent =
+    (d.storage || '?') + ' · LLM ' + (d.llm && d.llm.enabled ? (d.llm.model||'on') : 'off') +
+    ' · scope ' + (d.scope || 'default');
+
+  const rep = d.report || {};
+  document.getElementById('money').textContent = money(rep.money);
+  const f = rep.formation;
+  document.getElementById('formation').textContent = f
+    ? ('Alineación ' + f.join('-') + (rep.lineup_changed ? ' · cambiada' : ' · ya óptima'))
+    : 'Sin datos de alineación todavía';
+
+  document.getElementById('last-run').textContent = when(last.started_at);
+  document.getElementById('last-run-note').textContent = last.started_at
+    ? (ago(last.started_at) + ' · ' + (last.trigger||'?') + ' · ' + (last.status||'?'))
+    : 'El scheduler aún no ha llamado a /api/tick';
+
+  document.getElementById('next').textContent = when(d.next_deadline);
+  document.getElementById('next-note').textContent = d.next_deadline
+    ? ago(d.next_deadline) : 'Nada en cola';
+
+  document.getElementById('sub').textContent =
+    'Actualizado ' + when(d.now) + ' · ' + (d.pending_actions||[]).length + ' en cola';
+
+  rows(document.getElementById('pending'), d.pending_actions, a => {
+    const p = a.payload || {};
+    return '<div class="row"><div class="t">' + esc(when(a.execute_at)) + '</div>' +
+      '<div class="k">' + esc(a.type) + '</div><div class="txt">' +
+      esc(p.nombre || p.message || p.market_id || a.idempotency_key) +
+      (p.max_bid ? ' · tope ' + money(p.max_bid) : '') +
+      '<small>' + esc(a.status) + ' · ' + esc(a.idempotency_key) + '</small></div></div>';
+  }, 'No hay acciones programadas.');
+
+  const flips = rep.flips || [];
+  const planEl = document.getElementById('plan');
+  if(!flips.length){
+    planEl.innerHTML = '<div class="empty">Sin oportunidades de flip en la última revisión.</div>';
+  } else {
+    planEl.innerHTML = '<table><thead><tr><th>Jugador</th><th>Vía</th><th>Cierra</th>' +
+      '<th class="num">Compra</th><th class="num">Margen</th></tr></thead><tbody>' +
+      flips.map(o => '<tr><td>' + esc(o.nombre) + '</td><td>' + esc(o.via) + '</td>' +
+        '<td>' + esc(when(o.expires_at)) + '</td>' +
+        '<td class="num">' + money(o.buy_price) + '</td>' +
+        '<td class="num">' + esc(o.margin_pct) + '%</td></tr>').join('') +
+      '</tbody></table>';
+  }
+
+  rows(document.getElementById('tasks'), rep.tasks, t =>
+    '<div class="row"><div class="k">#' + esc(t.id) + '</div><div class="txt">' +
+    esc(t.text) + (t.due ? '<small>antes de ' + esc(when(t.due)) + '</small>' : '') +
+    '</div></div>', 'Sin tareas pendientes.');
+
+  rows(document.getElementById('events'), d.events, e =>
+    '<div class="row"><div class="t">' + esc(when(e.iso)) + '</div>' +
+    '<div class="k">' + esc(e.kind) + '</div><div class="txt">' + esc(e.title) +
+    (e.detail ? '<small>' + esc(typeof e.detail === 'string' ? e.detail
+      : JSON.stringify(e.detail)) + '</small>' : '') + '</div></div>',
+    'Todavía no hay eventos.');
+
+  rows(document.getElementById('executions'), d.executions, x => {
+    const s = x.summary || {};
+    const bits = [];
+    if(s.actions) bits.push(s.actions.length + ' acciones');
+    if(s.review && s.review.status) bits.push('review: ' + s.review.status);
+    if(s.duration_seconds !== undefined) bits.push(s.duration_seconds + 's');
+    return '<div class="row"><div class="t">' + esc(when(x.started_at)) + '</div>' +
+      '<div class="k">' + esc(x.trigger||'?') + '</div><div class="txt">' +
+      esc(x.status) + (bits.length ? ' · ' + esc(bits.join(' · ')) : '') +
+      (x.error ? '<small>' + esc(x.error) + '</small>' : '') + '</div></div>';
+  }, 'Sin ejecuciones registradas.');
+}
+
+async function load(){
+  try{
+    const d = await call('/api/status?events=60');
+    if(d.ok === false) throw new Error(d.error || 'error');
+    render(d);
+  }catch(err){
+    if(String(err.message) === 'unauthorized'){ return logout('Secreto incorrecto.'); }
+    document.getElementById('sub').textContent = 'Error: ' + err.message;
+  }
+}
+
+function start(){
+  gate.hidden = true; app.hidden = false;
+  load();
+  clearInterval(timer);
+  timer = setInterval(load, 20000);
+}
+
+function logout(msg){
+  clearInterval(timer);
+  sessionStorage.removeItem(KEY); secret = '';
+  app.hidden = true; gate.hidden = false;
+  document.getElementById('gate-err').textContent = msg || '';
+}
+
+document.getElementById('enter').onclick = () => {
+  secret = document.getElementById('secret').value.trim();
+  if(!secret) return;
+  sessionStorage.setItem(KEY, secret);
+  document.getElementById('gate-err').textContent = '';
+  start();
+};
+document.getElementById('secret').addEventListener('keydown',
+  e => { if(e.key === 'Enter') document.getElementById('enter').click(); });
+document.getElementById('refresh').onclick = load;
+document.getElementById('logout').onclick = () => logout();
+document.getElementById('run').onclick = async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true; btn.textContent = 'Ejecutando…';
+  try{ await call('/api/admin?action=review', {method:'POST'}); await load(); }
+  catch(err){ document.getElementById('sub').textContent = 'Error: ' + err.message; }
+  btn.disabled = false; btn.textContent = 'Forzar revisión';
+};
+
+if(secret) start(); else gate.hidden = false;
+</script>
+</body>
+</html>

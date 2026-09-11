@@ -1,0 +1,51 @@
+[project]
+name = "fantasybot"
+version = "0.1.0"
+description = "Autonomous agent for LALIGA Fantasy (toolbox + strategies)"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Jon Ortega" }]
+keywords = ["laliga", "fantasy", "football", "agent", "automation", "cli"]
+dependencies = []  # standard library only
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Environment :: Console",
+  "Topic :: Games/Entertainment",
+]
+
+[project.urls]
+Homepage = "https://github.com/jonortega20/fantasybot"
+Repository = "https://github.com/jonortega20/fantasybot"
+
+[project.scripts]
+fantasybot = "fantasybot.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["fantasybot*"]
+
+[tool.setuptools.package-data]
+fantasybot = ["web/*.html"]  # the monitoring UI panel ships with the package
+
+# ---------------------------------------------------------------------------
+# Type checking
+#
+# Scoped to the serverless layer added on top of the CLI. The upstream modules
+# (strategy/, sources/, the API client) were written without annotations and
+# read fine that way; retrofitting types across them would be a large diff with
+# no bearing on whether the bot runs on Vercel, so they are checked loosely and
+# not gated. What IS gated is everything that decides when money moves.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+files = ["fantasybot/storage", "fantasybot/scheduler.py", "fantasybot/tick.py",
+         "fantasybot/llm", "fantasybot/serverless", "api"]
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true

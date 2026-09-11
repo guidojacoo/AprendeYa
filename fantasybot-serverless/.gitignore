@@ -1,0 +1,27 @@
+# Secrets: NEVER commit tokens or credentials
+tokens.json
+.pkce.json
+.env
+.env.local
+*.token
+
+# Scrape cache and agent state (regenerable)
+.cache/
+.state/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Packaging and tests
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Vercel
+.vercel/

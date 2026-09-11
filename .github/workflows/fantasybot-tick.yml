@@ -1,0 +1,127 @@
+# The scheduler. GitHub Actions is the clock; Vercel is the bot.
+#
+# Two things this workflow has to reconcile:
+#
+#   * GitHub's cron is best-effort. On the free hosted runners a `*/5` schedule
+#     regularly fires 5-20 minutes late, and sometimes skips. You cannot land a
+#     bid at 20:44:55 by hoping the cron is punctual.
+#   * A market close IS punctual, to the second.
+#
+# So the cron is not asked to be precise. It only has to wake up SOMETIME inside
+# the window before a deadline. /api/tick then answers "the next action is due in
+# 214 seconds", and this job sleeps those 214 seconds on GitHub's runner — which
+# is a free, accurate clock — before calling back in sniper mode to place the bid.
+#
+# Minutes: on a PUBLIC repository GitHub Actions minutes are free and unmetered,
+# which is what makes a 5-minute cadence viable at zero cost. On a PRIVATE repo
+# every job is billed rounded up to 1 minute, so `*/5` alone is ~8,600 min/month
+# against a 2,000-minute free allowance. See DEPLOY.md — raise CRON below to
+# */20 or make the repo public.
+
+name: fantasybot tick
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force the review even if it is not due by cadence"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Decide everything, send nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      APP_URL: ${{ vars.VERCEL_APP_URL }}
+      SECRET: ${{ secrets.BOT_CRON_SECRET }}
+      # Longest this job will hold the line waiting for a deadline. Keep it under
+      # the job timeout, and mind the minute cost on a private repo.
+      MAX_HOLD_SECONDS: "1200"
+    steps:
+      - name: Check configuration
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "::error::VERCEL_APP_URL is not set. Add it under" \
+                 "Settings > Secrets and variables > Actions > Variables."
+            exit 1
+          fi
+          if [ -z "$SECRET" ]; then
+            echo "::error::BOT_CRON_SECRET is not set. Add it under" \
+                 "Settings > Secrets and variables > Actions > Secrets."
+            exit 1
+          fi
+
+      # Workflow inputs come in through `env`, never interpolated into the
+      # script body: `${{ }}` inside a shell block is textual substitution, and
+      # that is how a workflow ends up running whatever an input contained.
+      - name: Tick, then hold for any imminent deadline
+        env:
+          FORCE_INPUT: ${{ inputs.force }}
+          DRY_INPUT: ${{ inputs.dry_run }}
+        run: |
+          set -uo pipefail
+
+          call() {
+            # $1 = mode. Returns the JSON body; a transport failure yields {}.
+            curl -sS --max-time 70 --retry 2 --retry-delay 3 \
+                 -X POST \
+                 -H "Authorization: Bearer ${SECRET}" \
+                 -H "Content-Type: application/json" \
+                 "${APP_URL}/api/tick?mode=$1&force=${FORCE:-0}&dry_run=${DRY:-0}" \
+              || echo '{}'
+          }
+
+          FORCE=0; DRY=0
+          [ "${FORCE_INPUT:-}" = "true" ] && FORCE=1
+          [ "${DRY_INPUT:-}" = "true" ] && DRY=1
+
+          BODY="$(call tick)"
+          echo "$BODY" | jq -C '{ok, mode, duration_seconds, pending, next_deadline,
+                                  sleep_seconds, actions, review: (.review.status // null),
+                                  error}' 2>/dev/null || echo "$BODY"
+
+          if [ "$(echo "$BODY" | jq -r '.ok // false')" != "true" ]; then
+            echo "::error::tick failed: $(echo "$BODY" | jq -r '.error // "no response"')"
+            exit 1
+          fi
+
+          # ---- hold the line ----------------------------------------------
+          # Only when something is actually queued and near. Otherwise we exit
+          # immediately and let the next cron do the next tick — no idle runner.
+          HELD=0
+          for i in $(seq 1 12); do
+            SLEEP="$(echo "$BODY" | jq -r '.sleep_seconds // empty')"
+            [ -z "$SLEEP" ] && { echo "Nothing queued. Done."; break; }
+
+            LEFT=$(( MAX_HOLD_SECONDS - HELD ))
+            if [ "$SLEEP" -gt "$LEFT" ]; then
+              echo "Next action in ${SLEEP}s — beyond this job's hold budget (${LEFT}s left)."
+              echo "A later cron run will pick it up."
+              break
+            fi
+
+            # Wake a few seconds early: the function itself polls the market into
+            # the final seconds, so it wants to already be running at T-5.
+            WAIT=$(( SLEEP - 5 )); [ "$WAIT" -lt 0 ] && WAIT=0
+            echo "Holding ${WAIT}s for an action due in ${SLEEP}s (iteration $i)..."
+            sleep "$WAIT"
+            HELD=$(( HELD + WAIT + 5 ))
+
+            BODY="$(call sniper)"
+            echo "$BODY" | jq -C '{ok, actions, next_deadline, sleep_seconds, error}' \
+              2>/dev/null || echo "$BODY"
+            if [ "$(echo "$BODY" | jq -r '.ok // false')" != "true" ]; then
+              echo "::warning::sniper tick failed: $(echo "$BODY" | jq -r '.error // "?"')"
+              break
+            fi
+          done

@@ -1,0 +1,3 @@
+# fantasybot runs on the standard library alone.
+# Nothing to install: no wheels to build, no cold-start penalty, no
+# dependency that can break a Vercel deploy at 3am.

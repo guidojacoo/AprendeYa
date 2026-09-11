@@ -1,0 +1,29 @@
+# Lint rules chosen to match the codebase that already exists, not to relitigate
+# it. The upstream project is careful, readable, stdlib-only Python; the job here
+# is to catch real defects — unused names, shadowed builtins, mutable defaults,
+# swallowed exception context — not to reflow someone else's working code into a
+# newer idiom. Modernisation rules (UP*, I*) are deliberately off: they would
+# rewrite hundreds of upstream lines and make every future diff unreadable.
+
+line-length = 100
+target-version = "py311"
+extend-exclude = ["hermes", "deploy"]
+
+[lint]
+select = [
+  "E",   # pycodestyle errors
+  "W",   # pycodestyle warnings
+  "F",   # pyflakes — almost always a real bug
+  "B",   # bugbear
+  "C4",  # comprehensions
+]
+ignore = [
+  "E501",  # long lines: the existing code wraps at ~90 by hand, and reflowing a
+           # comment-dense file to satisfy a linter loses more than it gains
+  "B008",
+]
+
+[lint.per-file-ignores]
+# Tests reach into module internals on purpose: that is how you pin behaviour
+# with no public surface (a lease, a private path constant).
+"tests/*" = ["B017"]

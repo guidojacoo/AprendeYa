@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FantasyBot · Console</title>
+<style>
+  /* FantasyBot — operations console. Visual language inspired by Linear:
+     clean, crisp surfaces, 1px border + subtle shadow, indigo accent
+     only on interactive elements, semantic color kept separate, data in monospace.
+     Deliberately light theme (everything painted explicitly). */
+  :root{
+    --page:#f6f7f9; --surface:#ffffff; --surface2:#fafbfc; --hover:#f4f5f8;
+    --ink:#12131a; --ink2:#3a3d47; --muted:#6b6f7a; --faint:#8b8f9a;
+    --line:#eceef1; --line2:#f1f2f5;
+    --brand:#5e6ad2; --brand-d:#4f59c0; --brand-bg:#eef0fc;
+    --good:#1a7f52; --good-bg:#e7f4ec; --warn:#9a6b12; --warn-bg:#f9f2e2;
+    --bad:#bd423a; --bad-bg:#fbeceb;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --sh-sm:0 1px 2px rgba(18,25,50,.05);
+    --sh-md:0 1px 2px rgba(18,25,50,.05),0 6px 20px -8px rgba(18,25,50,.14);
+    --sh-btn:0 1px 2px rgba(40,46,110,.28),0 1px 1px rgba(0,0,0,.04);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  /* min-height (not height:100%) so the page GROWS with the feed and the window scrolls;
+     a fixed height:100% trapped the body at viewport height and .app's overflow:hidden
+     then clipped every card past the first screenful. */
+  body{background:var(--page); color:var(--ink); font:14.5px/1.55 var(--sans);
+    -webkit-font-smoothing:antialiased; display:flex; flex-direction:column; min-height:100vh;
+    padding:26px 16px 40px}
+  .app{width:100%; max-width:800px; margin:0 auto; background:var(--surface);
+    border:1px solid var(--line); border-radius:16px; overflow:hidden; box-shadow:var(--sh-md)}
+
+  header{display:flex; align-items:center; gap:12px; height:58px; padding:0 16px;
+    border-bottom:1px solid var(--line); position:relative}
+  .logo{width:26px;height:26px;border-radius:8px;flex:none;display:grid;place-items:center;
+    background:linear-gradient(150deg,#6b76e0,#4f59c0);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.28), var(--sh-sm)}
+  .logo svg{width:15px;height:15px}
+  .brand{display:flex; flex-direction:column; line-height:1.15}
+  .brand .n{font-weight:650; font-size:14.5px; letter-spacing:-.2px}
+  .brand .s{font-size:10px; text-transform:uppercase; letter-spacing:1.3px; color:var(--faint); font-weight:600}
+  .spacer{flex:1}
+  .live{display:flex; align-items:center; gap:7px; font-size:11px; text-transform:uppercase;
+    letter-spacing:.8px; color:var(--muted); font-weight:600; padding-right:4px}
+  .led{width:7px;height:7px;border-radius:50%;background:var(--faint); transition:.3s}
+  .led.on{background:var(--good); box-shadow:0 0 0 3px rgba(26,127,82,.15)}
+  .btn{display:inline-flex; align-items:center; gap:8px; height:34px; padding:0 14px;
+    font:inherit; font-size:13px; font-weight:600; color:#fff; cursor:pointer;
+    background:linear-gradient(180deg,#6670da,var(--brand)); border:1px solid var(--brand-d);
+    border-radius:8px; box-shadow:var(--sh-btn); transition:transform .08s ease, filter .15s ease}
+  .btn:hover{filter:brightness(1.05)} .btn:active{transform:translateY(1px)}
+  .btn:disabled{cursor:default; filter:saturate(.6) brightness(1.02); opacity:.9}
+  .btn svg{width:14px;height:14px}
+  .btn .spin{width:13px;height:13px;border-radius:50%;border:2px solid rgba(255,255,255,.45);
+    border-top-color:#fff; animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .prog{position:absolute; left:0; right:0; bottom:-1px; height:2px; overflow:hidden; opacity:0; transition:opacity .2s}
+  .prog.on{opacity:1}
+  .prog::before{content:""; position:absolute; inset:0 auto 0 0; width:34%;
+    background:linear-gradient(90deg,transparent,var(--brand),transparent); animation:slide 1.15s ease-in-out infinite}
+  @keyframes slide{0%{left:-34%}100%{left:100%}}
+
+  .run-hd{display:flex; align-items:center; gap:9px; padding:11px 16px; background:var(--surface2);
+    border-bottom:1px solid var(--line2)}
+  .run-hd .lbl{font-size:10.5px; text-transform:uppercase; letter-spacing:1.1px; color:var(--muted); font-weight:700}
+  .run-hd .dt{font-family:var(--mono); font-size:11.5px; color:var(--faint)}
+  .run-hd .cnt{margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--faint);
+    background:var(--surface); border:1px solid var(--line); padding:2px 9px; border-radius:20px}
+
+  .feed{min-height:120px}
+  .ev{display:grid; grid-template-columns:58px 40px 1fr auto; align-items:center; gap:13px;
+    padding:12px 16px; border-top:1px solid var(--line2); transition:background .15s}
+  .ev:first-child{border-top:none}
+  .ev:hover{background:var(--hover)}
+  .ev.rise{animation:rise .42s cubic-bezier(.2,.7,.3,1)}
+  @keyframes rise{from{opacity:0; transform:translateY(6px)}to{opacity:1; transform:none}}
+  .ev .t{font-family:var(--mono); font-size:12px; color:var(--faint); font-variant-numeric:tabular-nums}
+  .av{width:38px;height:38px;border-radius:50%;overflow:hidden;flex:none;position:relative;
+    background:var(--surface2); border:1px solid var(--line); display:grid; place-items:center}
+  .av img{width:100%;height:100%;object-fit:cover;object-position:top center}
+  .av.ic{border-radius:9px}
+  .av.ic svg{width:18px;height:18px}
+  .av.k-brand{color:var(--brand); background:var(--brand-bg); border-color:transparent}
+  .av.k-good{color:var(--good); background:var(--good-bg); border-color:transparent}
+  .av.k-warn{color:var(--warn); background:var(--warn-bg); border-color:transparent}
+  .av.k-bad{color:var(--bad); background:var(--bad-bg); border-color:transparent}
+  .av .ring{position:absolute; inset:-2px; border-radius:50%; border:2px solid transparent}
+  .av.r-good .ring{border-color:rgba(26,127,82,.55)} .av.r-warn .ring{border-color:rgba(154,107,18,.5)}
+  .av.r-bad .ring{border-color:rgba(189,66,58,.5)}
+  .desc{min-width:0}
+  .desc .tt{font-weight:550; color:var(--ink); letter-spacing:-.1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .desc .sb{color:var(--muted); font-size:12.5px; margin-top:1px}
+  .desc .sb b{color:var(--ink2); font-weight:600; font-family:var(--mono); font-variant-numeric:tabular-nums}
+  .right{display:flex; align-items:center; gap:12px; justify-self:end}
+  .amt{font-family:var(--mono); font-size:13.5px; font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; letter-spacing:-.3px}
+  .amt.dim{color:var(--faint); font-weight:500}
+  .chip{font-family:var(--mono); font-size:12px; font-weight:600; color:var(--brand); background:var(--brand-bg); padding:3px 8px; border-radius:6px}
+  .badge{font-size:10px; text-transform:uppercase; letter-spacing:.5px; font-weight:700;
+    padding:3px 9px; border-radius:6px; white-space:nowrap; min-width:74px; text-align:center}
+  .badge.good{color:var(--good); background:var(--good-bg)}
+  .badge.warn{color:var(--warn); background:var(--warn-bg)}
+  .badge.bad{color:var(--bad); background:var(--bad-bg)}
+  .badge.brand{color:var(--brand); background:var(--brand-bg)}
+
+  .kpis{display:flex; border-top:1px solid var(--line)}
+  .kpi{flex:1; padding:12px 16px; border-left:1px solid var(--line2)}
+  .kpi:first-child{border-left:none}
+  .kpi .v{font-family:var(--mono); font-size:17px; font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; letter-spacing:-.4px}
+  .kpi .l{font-size:9.5px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); margin-top:1px}
+  .idle{color:var(--faint); text-align:center; padding:40px 16px 44px; font-size:13px; line-height:1.7}
+  .idle code{font-family:var(--mono); font-size:12px; background:var(--surface2); border:1px solid var(--line); padding:2px 7px; border-radius:6px; color:var(--brand)}
+
+  @media (max-width:640px){
+    .ev{grid-template-columns:48px 36px 1fr; row-gap:8px}
+    .right{grid-column:1 / -1; justify-self:start; padding-left:61px}
+  }
+  @media (prefers-reduced-motion:reduce){ .ev.rise{animation:none} .prog::before{animation:none;left:0;width:100%;opacity:.5} .btn .spin{animation:none} }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand"><span class="n">FantasyBot</span><span class="s">Console</span></div>
+    <div class="spacer"></div>
+    <div class="live"><span id="led" class="led"></span><span id="ledtxt">connecting</span></div>
+    <button id="run" class="btn">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>
+      <span id="runtxt">Launch agent</span></button>
+    <div id="prog" class="prog"></div>
+  </header>
+
+  <div class="run-hd">
+    <span class="lbl">Agent cycle</span>
+    <span class="dt" id="rundt">—</span>
+    <span class="cnt" id="cnt">0 actions</span>
+  </div>
+
+  <div class="feed" id="feed">
+    <div class="idle" id="idle">No activity yet. Press <b>Launch agent</b>, or leave it
+      open and you'll see the next cron cycle.<br>Also: <code>fantasybot watch --run</code></div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v" id="k-act">0</div><div class="l">Actions</div></div>
+    <div class="kpi"><div class="v" id="k-tok">—</div><div class="l">Tokens</div></div>
+    <div class="kpi"><div class="v" id="k-tool">—</div><div class="l">Tool-calls</div></div>
+  </div>
+</div>
+
+<script>
+const IC={
+  activity:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5 7 5-16 2.5 9h4"/></svg>',
+  grid:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.4"/><rect x="13" y="4" width="7" height="7" rx="1.4"/><rect x="4" y="13" width="7" height="7" rx="1.4"/><rect x="13" y="13" width="7" height="7" rx="1.4"/></svg>',
+  clock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4.5l3 1.6"/></svg>',
+  up:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6 11l6-6 6 6"/></svg>',
+  tag:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5V5h7.5L20 13.5 13.5 20z"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" stroke="none"/></svg>',
+  x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>',
+};
+// kind -> icon, avatar color, default status label
+const KIND={
+  review:{ic:"activity",av:"k-brand"}, read:{ic:"activity",av:"k-brand"},
+  lineup:{ic:"grid",av:"k-good"}, bid:{ic:"up",av:"k-good"},
+  "bid-plan":{ic:"clock",av:"k-warn"}, sell:{ic:"tag",av:"k-warn"}, clause:{ic:"tag",av:"k-warn"},
+  cancel:{ic:"x",av:"k-bad"}, error:{ic:"x",av:"k-bad"}, note:{ic:"activity",av:"k-brand"},
+};
+const ACTION=new Set(["lineup","bid","bid-plan","sell","clause","cancel"]);
+
+const feed=document.getElementById("feed"), idle=document.getElementById("idle");
+const btn=document.getElementById("run"), runtxt=document.getElementById("runtxt"), prog=document.getElementById("prog");
+const led=document.getElementById("led"), ledtxt=document.getElementById("ledtxt");
+const kAct=document.getElementById("k-act"),kTok=document.getElementById("k-tok"),kTool=document.getElementById("k-tool");
+const cnt=document.getElementById("cnt"), rundt=document.getElementById("rundt");
+const reduce=matchMedia("(prefers-reduced-motion:reduce)").matches;
+let started=false, actions=0, connected=false, busy=false, idleTimer=null;
+
+const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+function detail(d){ if(d==null)return ""; if(typeof d==="string")return esc(d);
+  return Object.entries(d).map(([k,v])=>`${esc(k)}: <b>${esc(v)}</b>`).join(" &nbsp;·&nbsp; "); }
+function badge(ev){
+  if(ev.status==="plan"||ev.kind==="bid-plan")return["warn","Scheduled"];
+  if(ev.kind==="cancel")return["bad","Withdrawn"];
+  if(ev.status==="error")return["bad","Error"];
+  if(ev.kind==="sell")return["brand","For sale"];
+  return["good","Done"];
+}
+function add(ev, live){
+  if(idle)idle.style.display="none";
+  const meta=ev.meta||{}, k=KIND[ev.kind]||{ic:"activity",av:"k-brand"};
+  const av = meta.photo
+    ? `<span class="av ${meta.ring||""}"><span class="ring"></span><img src="${esc(meta.photo)}" alt="" onerror="this.style.display='none'"></span>`
+    : `<span class="av ic ${k.av}">${IC[k.ic]}</span>`;
+  const b=badge(ev);
+  const right = meta.chip?`<span class="chip">${esc(meta.chip)}</span>`
+    : meta.amount?`<span class="amt">${esc(meta.amount)}</span>`:"";
+  const row=document.createElement("div"); row.className="ev"+(live&&!reduce?" rise":"");
+  const t=ev.iso?new Date(ev.iso).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",second:"2-digit"}):"";
+  row.innerHTML=`<div class="t">${t}</div>${av}
+    <div class="desc"><div class="tt">${esc(ev.title||"")}</div>
+      ${ev.detail!=null?`<div class="sb">${detail(ev.detail)}</div>`:""}</div>
+    <div class="right">${right}<span class="badge ${b[0]}">${b[1]}</span></div>`;
+  feed.appendChild(row);
+  if(ACTION.has(ev.kind)){actions++; kAct.textContent=actions; cnt.textContent=actions+(actions===1?" action":" actions");}
+  if(!rundt.dataset.set){rundt.textContent=new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"}); rundt.dataset.set="1";}
+  if(live){ nudgeBusy(); if(stick) window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"}); }
+}
+let stick=true;
+addEventListener("scroll",()=>{stick=(innerHeight+scrollY)>=document.body.scrollHeight-120;});
+
+// run state: active while events arrive; turns off after 8s of silence
+function setBusy(on){ busy=on; btn.disabled=on; prog.classList.toggle("on",on);
+  runtxt.textContent=on?"Running…":"Rerun";
+  btn.querySelector("svg").style.display=on?"none":"";
+  let s=btn.querySelector(".spin"); if(on&&!s){s=document.createElement("span");s.className="spin";btn.prepend(s);} if(!on&&s)s.remove();
+}
+function nudgeBusy(){ if(!busy)setBusy(true); clearTimeout(idleTimer); idleTimer=setTimeout(()=>setBusy(false),8000); }
+
+async function launch(){
+  if(busy)return;
+  try{ const r=await fetch("/run",{method:"POST"});
+    if(r.status===409){ nudgeBusy(); return; }
+    setBusy(true); nudgeBusy();
+  }catch(_){ /* no backend (e.g. opened as a file): nothing happens */ }
+}
+btn.addEventListener("click",launch);
+
+function setLed(on){ connected=on; led.classList.toggle("on",on); ledtxt.textContent=on?"live":"offline"; }
+function connect(){
+  const es=new EventSource("/stream");
+  es.onopen=()=>setLed(true); es.onerror=()=>setLed(false);
+  es.onmessage=e=>{ try{ add(JSON.parse(e.data), started); }catch(_){} };
+  setTimeout(()=>{started=true;},800);
+}
+async function insights(){
+  try{ const j=await (await fetch("/insights")).json(); if(!j.available)return;
+    const k=n=>n==null?"—":(n>=1000?(n/1000).toFixed(n>=100000?0:1)+"k":String(n));
+    kTok.textContent=k(j.total_tokens); kTool.textContent=j.tool_calls??"—";
+  }catch(_){}
+}
+connect(); insights(); setInterval(insights,20000);
+</script>
+</body>
+</html>
