@@ -22,11 +22,15 @@ import urllib.request
 from .. import config
 
 # provider -> (wire format, base url, default model)
-# The default models are the free-tier-friendly choice for each provider; override
-# with LLM_MODEL whenever a provider retires one.
+#
+# These defaults are the free-tier-friendly choice per provider, and they GO
+# STALE: providers retire models on a few months' notice (Groq shut down
+# llama-3.3-70b-versatile on 2026-08-16, which is why the default below is no
+# longer it). If a call comes back "model not found", set LLM_MODEL to something
+# current from the provider's own list — no code change needed.
 PROVIDERS = {
     "groq": ("openai", "https://api.groq.com/openai/v1",
-             "llama-3.3-70b-versatile"),
+             "openai/gpt-oss-120b"),
     "openrouter": ("openai", "https://openrouter.ai/api/v1",
                    "meta-llama/llama-3.3-70b-instruct:free"),
     "openai": ("openai", "https://api.openai.com/v1", "gpt-4o-mini"),
