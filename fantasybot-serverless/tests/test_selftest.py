@@ -271,13 +271,17 @@ class SelfHealingClock(StorageTestCase):
         self.addCleanup(lambda: setattr(config, "VERCEL_APP_URL",
                                         self._saved_url))
 
-    def _heal(self, stored):
+    def _heal(self, stored, stored_secret=None):
         calls = []
+        from fantasybot import config
+        secret = (stored_secret if stored_secret is not None
+                  else config.BOT_CRON_SECRET)
 
         def fake_request(method, path, params=None, body=None, prefer=None):
             calls.append((method, body))
             if method == "GET":
-                return [] if stored is None else [{"app_url": stored}]
+                return ([] if stored is None
+                        else [{"app_url": stored, "bot_secret": secret}])
             return None
 
         with mock.patch.object(type(self.store), "kind", "supabase"), \
@@ -290,6 +294,31 @@ class SelfHealingClock(StorageTestCase):
         written = self._heal("https://TU-APP.vercel.app")
         self.assertEqual(written[0]["app_url"], "https://real.vercel.app")
 
+    def test_it_syncs_a_mismatched_secret(self):
+        """Fifteen 401s in fifteen minutes is what a wrong secret looks like:
+        the clock runs, every call is refused, nothing surfaces."""
+        from fantasybot import config
+        saved = config.BOT_CRON_SECRET
+        config.BOT_CRON_SECRET = "el-de-vercel"
+        try:
+            written = self._heal("https://real.vercel.app",
+                                 stored_secret="el-viejo")
+        finally:
+            config.BOT_CRON_SECRET = saved
+        self.assertEqual(written[0]["bot_secret"], "el-de-vercel")
+        self.assertNotIn("app_url", written[0],
+                         "a URL somebody chose must be left alone")
+
+    def test_a_matching_secret_is_not_rewritten(self):
+        from fantasybot import config
+        saved = config.BOT_CRON_SECRET
+        config.BOT_CRON_SECRET = "igual"
+        try:
+            self.assertEqual(self._heal("https://real.vercel.app",
+                                        stored_secret="igual"), [])
+        finally:
+            config.BOT_CRON_SECRET = saved
+
     def test_it_reports_whether_it_wrote(self):
         """The health endpoint surfaces this, so it has to be truthful: a repair
         that happened and one that was unnecessary must not look the same."""
@@ -297,7 +326,10 @@ class SelfHealingClock(StorageTestCase):
 
         def run(stored):
             def fake_request(method, path, params=None, body=None, prefer=None):
-                return [] if stored is None else [{"app_url": stored}]
+                from fantasybot import config
+                return ([] if stored is None
+                        else [{"app_url": stored,
+                               "bot_secret": config.BOT_CRON_SECRET}])
             with mock.patch.object(type(self.store), "kind", "supabase"), \
                  mock.patch.object(self.store, "_request", fake_request,
                                    create=True):

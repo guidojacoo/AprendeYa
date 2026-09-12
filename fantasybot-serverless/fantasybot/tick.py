@@ -1060,43 +1060,58 @@ PLACEHOLDER_HOSTS = ("tu-app", "your-app", "tu-dominio")
 
 
 def _heal_scheduler_url(store):
-    """Point the database's clock at wherever this deployment actually is.
+    """Point the database's clock at this deployment, with this deployment's key.
 
-    The scheduler migration ships a placeholder URL you are meant to replace, and
-    an unreplaced one fails in the worst possible way: pg_net cheerfully posts to
-    a domain that does not resolve, every minute, forever, and nothing is ever
-    woken. No error, no log, no symptom except a bot that quietly does nothing.
+    The scheduler migration ships a placeholder URL and asks you to paste a
+    secret, and both fail in the worst possible way when they are wrong: pg_net
+    dutifully fires every minute and Vercel dutifully refuses, or the request
+    goes to a domain that does not resolve. No error surfaces anywhere a person
+    looks — the clock is running, the bot simply never wakes. This deployment saw
+    both: a placeholder URL for a night, then fifteen 401s in fifteen minutes.
 
-    A running function knows its own address, so it can simply fix the row. It
-    only writes when the stored value is a placeholder or empty — never to
-    override a URL somebody chose deliberately, which would hijack a scheduler
-    aimed at another deployment on the same database.
+    A running function knows its own address AND its own secret, so it can settle
+    both. It writes the URL only over a placeholder or an empty value, never over
+    one somebody chose — two deployments can share a database, and hijacking the
+    other one's scheduler would be worse than the problem. The secret is
+    different: a mismatched one is never intentional, it is always the reason
+    every call is refused, so it is simply kept in sync.
     """
     if store.kind != "supabase":
         return False
     url = config.self_url()
-    if not url:
+    secret = config.BOT_CRON_SECRET
+    if not (url or secret):
         return False
     try:
         rows = store._request("GET", "scheduler_config",
-                              params={"select": "app_url", "limit": "1"})
+                              params={"select": "app_url,bot_secret",
+                                      "limit": "1"})
     except Exception:
         return False    # migration 0002 not applied; nothing to heal
     if not rows:
         return False
-    current = (rows[0].get("app_url") or "").strip()
-    if current and not any(h in current.lower() for h in PLACEHOLDER_HOSTS):
-        return False    # deliberately set — leave it alone
+
+    patch = {}
+    current_url = (rows[0].get("app_url") or "").strip()
+    if url and (not current_url
+                or any(h in current_url.lower() for h in PLACEHOLDER_HOSTS)):
+        patch["app_url"] = url
+    if secret and (rows[0].get("bot_secret") or "") != secret:
+        patch["bot_secret"] = secret
+    if not patch:
+        return False
+
     try:
-        store._request("PATCH", "scheduler_config",
-                       params={"id": "eq.1"},
-                       body={"app_url": url, "updated_at": to_iso(utcnow())},
-                       prefer="return=minimal")
-        events.emit("note", f"Reloj de la base apuntado a {url}",
-                    detail={"was": current or "(vacío)"})
-        notify.send("scheduler_url_fixed",
-                    f"Corregí la URL del reloj en Supabase: {url}. "
-                    f"Estaba en un placeholder, así que nada despertaba al bot.",
+        patch["updated_at"] = to_iso(utcnow())
+        store._request("PATCH", "scheduler_config", params={"id": "eq.1"},
+                       body=patch, prefer="return=minimal")
+        fixed = " y ".join(
+            {"app_url": f"la URL ({url})",
+             "bot_secret": "el secreto"}[k] for k in patch if k != "updated_at")
+        events.emit("note", f"Reloj de la base: corregí {fixed}")
+        notify.send("scheduler_config_fixed",
+                    f"Corregí {fixed} en el reloj de Supabase. Estaba "
+                    f"desalineado, así que sus llamadas se rechazaban.",
                     level="good")
         return True
     except Exception:

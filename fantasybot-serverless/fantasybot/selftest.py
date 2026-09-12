@@ -208,8 +208,9 @@ def _db_scheduler():
                       f"última hora (deberían ser ~60).")
     if failed and not status.get("http_ok"):
         return FAIL, (f"El cron corre ({runs}/h) pero las {failed} llamadas a "
-                      f"Vercel fallaron. Revisá que bot_secret coincida con "
-                      f"BOT_CRON_SECRET.")
+                      f"Vercel fallaron — casi siempre es que bot_secret no "
+                      f"coincide con BOT_CRON_SECRET. Recargá esta página: la "
+                      f"función sincroniza el secreto sola al arrancar.")
     return OK, (f"La base despierta al bot cada minuto ({runs} veces la última "
                 f"hora, {status.get('http_ok', 0)} respuestas OK).")
 
