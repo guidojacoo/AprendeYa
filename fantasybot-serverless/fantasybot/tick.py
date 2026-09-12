@@ -935,6 +935,11 @@ def run_review(ctx, force=False):
                         detail={"elapsed": round(ctx.elapsed(), 1)},
                         status="plan")
         return {"status": "ok", "money": report.get("money"),
+                # The census travels with the answer, not only into the stored
+                # report: the caller asking "why did it buy a keeper" is holding
+                # this dict, and sending them to look somewhere else is how the
+                # evidence gets lost between the two.
+                "squad": report.get("squad"),
                 "lineup": lineup_res, "bids": bids_res, "gaps": gaps_res,
                 "listings": listings,
                 "clauses": clauses, "shield": shield, "matchday": matchday,
