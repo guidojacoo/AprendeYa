@@ -8,7 +8,7 @@ to pay a little above the ideal price (if you wait, another one may not show up 
 time). With several days ahead, there's no rush.
 """
 
-from ..matching import match_name, POS, position_id, position_of
+from ..matching import match_name, num, POS, position_id, position_of
 from ..sources.lineups import probable_lineups
 from . import points as points_mod
 
@@ -66,14 +66,16 @@ def candidates(client, league_id, position, prob_index=None, money=None, owned=N
             continue  # already yours
         clause = sale = None
         if el.get("discr") == "marketPlayerLeague":
-            via, price = "SISTEMA", el.get("salePrice") or pm.get("marketValue")
+            via, price = "SISTEMA", (num(el.get("salePrice"))
+                                     or num(pm.get("marketValue")))
         else:
-            clause = el.get("playerTeam", {}).get("buyoutClause")
+            clause = num(el.get("playerTeam", {}).get("buyoutClause")) or None
             # A player another manager has listed can simply be BID for, at his sale
             # price. That is nearly always cheaper than his clause (~1.67x value) and
             # available now instead of when the lock expires. Offering only the clause
             # here was overpricing every signing from another squad.
-            sale = el.get("salePrice") if el.get("status") == "on_sale" else None
+            sale = (num(el.get("salePrice")) or None) \
+                if el.get("status") == "on_sale" else None
             if sale and (clause is None or sale < clause):
                 via, price = "PUJA", sale
             else:
@@ -93,7 +95,7 @@ def candidates(client, league_id, position, prob_index=None, money=None, owned=N
             "price": price,
             "prob": prob,
             "disponible": disponible,
-            "valor": pm.get("marketValue"),
+            "valor": num(pm.get("marketValue")),
             # What he would actually add to the XI. Ranking gap signings by
             # market value picked the most expensive man available, which is a
             # different question from the one being asked.

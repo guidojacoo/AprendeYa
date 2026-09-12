@@ -16,7 +16,7 @@ without a falling trend. It only kicks in under low cash on purpose: with health
 there's no rush to sell a fine, merely-benched squad player.
 """
 
-from ..matching import match_name, position_of
+from ..matching import match_name, num, position_of
 from .lineup import payload_ids
 from . import points as points_mod
 
@@ -91,7 +91,7 @@ def sell_candidates(team, best, trends_index, falling_threshold=FALLING_THRESHOL
         if ptid in xi_ids or (coach_id and str(ptid) == coach_id):
             continue  # a starter, or the lineup's coach → don't sell
 
-        valor = pm.get("marketValue") or 0
+        valor = num(pm.get("marketValue"))
         trend = match_name(pm.get("nickname", ""), pm.get("name", ""), trends_index)
         tendencia = trend.get("tendencia") if trend else None
         prob = _prob(pm, prob_index) if low_cash else None

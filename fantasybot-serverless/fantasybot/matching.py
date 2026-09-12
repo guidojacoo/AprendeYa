@@ -13,6 +13,29 @@ import unicodedata
 POS = {1: "POR", 2: "DEF", 3: "MED", 4: "DEL", 5: "ENT"}
 
 
+def num(value, default=0):
+    """A number out of whatever LaLiga sent: int, float, numeric string, or junk.
+
+    Their API returns numeric fields as strings on some endpoints and as numbers
+    on others, in the same payload — the squad carries positionId "4" and
+    marketValue "2683751" side by side. Every read that then does arithmetic is
+    one TypeError away from taking a whole review down, and every read that only
+    compares is one silent wrong answer away, which is worse.
+
+    This cost the selling half of the bot: `round(value * 1.15)` on a string
+    raises, so no reserve price could be computed, so nobody was ever listed, so
+    no offer ever arrived, so nothing ever sold.
+    """
+    if value is None or isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def position_id(pm) -> int:
     """`positionId` as an int, whatever LaLiga felt like sending.
 

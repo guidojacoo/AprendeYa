@@ -6,7 +6,7 @@ probability of each player starting (futbolfantasy) and their availability
 body ready for `FantasyClient.update_lineup`. It does NOT apply anything by itself.
 """
 
-from ..matching import match_name, position_id
+from ..matching import match_name, num, position_id
 from ..sources.lineups import probable_lineups
 from .captain import form as _form, pick_captain
 from . import points as points_mod
@@ -46,7 +46,7 @@ def caliber_prior(market_value):
     cheap one is a benchwarmer. Prevents an unmatched cast-off (Purić, 0.4M) from being
     worth the same as an unmatched starter (Etta, 25M). Scaled 0-100 like the probability.
     """
-    v = market_value or 0
+    v = num(market_value)
     if v >= 15_000_000:
         return 62
     if v >= 8_000_000:

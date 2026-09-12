@@ -24,6 +24,7 @@ clock, no API calls — so the thresholds can be tested exhaustively, which matt
 for code that decides when to part with a player.
 """
 
+from ..matching import num
 from .lineup import payload_ids
 
 # Premium over market value required to part with a player, by how much we need him.
@@ -47,7 +48,14 @@ DECLINE = "decline"
 
 
 def _market_value(player):
-    return (player.get("playerMaster") or {}).get("marketValue") or 0
+    """His price, as a number whatever LaLiga sent.
+
+    It arrives as the string "2683751" from the squad endpoint, and
+    `round(value * 1.15)` on a string raises. That is what stopped every listing:
+    no reserve could be computed, so nobody went on the market, so no offer ever
+    came back, so nothing ever sold.
+    """
+    return num((player.get("playerMaster") or {}).get("marketValue"))
 
 
 def _is_out_of_league(player):

@@ -30,6 +30,7 @@ from . import execute as execute_mod
 from . import state
 from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
                         TickContext)
+from .matching import num
 from .storage import (DONE, FAILED, RUNNING, get_storage, parse_iso, to_iso,
                       utcnow)
 
@@ -200,7 +201,7 @@ def _execute_clause(ctx, action):
         if str((row.get("playerMaster") or {}).get("id")) != str(player_id):
             continue
         pt = row.get("playerTeam") or {}
-        current = pt.get("buyoutClause")
+        current = num(pt.get("buyoutClause")) or None
         unlock = pt.get("buyoutClauseLockedEndTime")
         break
     if current is None:
@@ -219,7 +220,7 @@ def _execute_clause(ctx, action):
         return {"retry": True, "status": "locked", "nombre": nombre,
                 "unlocks_at": to_iso(unlock_at)}
 
-    money = int(team.get("teamMoney") or 0)
+    money = int(num(team.get("teamMoney")))
     if money - current < config.CASH_RESERVE:
         return {"status": "insufficient_funds", "nombre": nombre,
                 "clause": current, "money": money,
@@ -444,7 +445,7 @@ def _plan_gap_signings(ctx, lid, team, report):
         return {"mode": "off", "queued": [], "committed": 0,
                 "gaps": list(gaps)}
 
-    budget = max(0, int(team.get("teamMoney") or 0) - config.CASH_RESERVE)
+    budget = max(0, int(num(team.get("teamMoney"))) - config.CASH_RESERVE)
     queued, skipped, committed = [], [], 0
     for pos in gaps:
         # Every candidate that clears the bar, then the best POINTS PER EURO
@@ -914,7 +915,7 @@ def run_review(ctx, force=False):
         gaps_res = (_plan_gap_signings(ctx, lid, team, report)
                     if _afford("gap_signings", 12) else {"committed": 0})
         remaining = dict(team)
-        remaining["teamMoney"] = max(0, int(team.get("teamMoney") or 0)
+        remaining["teamMoney"] = max(0, int(num(team.get("teamMoney")))
                                      - gaps_res.get("committed", 0))
         bids_res = (_plan_bids(ctx, client, lid, remaining, report)
                     if _afford("bids", 10) else {"mode": "out of time"})

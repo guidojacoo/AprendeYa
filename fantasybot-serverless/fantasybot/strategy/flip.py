@@ -8,7 +8,7 @@ Returns data; the CLI does the formatting.
 from datetime import date
 
 from .. import state
-from ..matching import match_name, position_of
+from ..matching import match_name, num, position_of
 from ..sources.market_trends import trends_index
 
 OFICIAL_TREND_DAYS = 7  # window for the official (LaLiga-banked) trend cross-check
@@ -59,7 +59,7 @@ def evaluate(element, index, horizon, today_iso=None):
     if not trend or not trend.get("valor"):
         return None
 
-    fantasy_value = pm.get("marketValue")
+    fantasy_value = num(pm.get("marketValue"))
     if fantasy_value and abs(trend["valor"] - fantasy_value) / fantasy_value > SANITY_MAX_DIFF:
         return None  # name match probably wrong
 
@@ -72,14 +72,14 @@ def evaluate(element, index, horizon, today_iso=None):
     # An unknown row falls into the manager-owned branch, which needs a buyout
     # clause and bails out cleanly without one. That is a refusal, not a guess.
     if element.get("discr") == "marketPlayerLeague":
-        sale_p = element.get("salePrice") or 0
-        mv = pm.get("marketValue") or 0
-        trend_val = trend.get("valor") or 0
+        sale_p = num(element.get("salePrice"))
+        mv = num(pm.get("marketValue"))
+        trend_val = num(trend.get("valor"))
         via, buy_price = "SISTEMA", max(sale_p, mv, trend_val)
         owner = "Mercado Libre"
     else:
         via = "CLAUSULA"
-        buy_price = (element.get("playerTeam") or {}).get("buyoutClause")
+        buy_price = num((element.get("playerTeam") or {}).get("buyoutClause")) or None
         if not buy_price:
             return None
         owner = (

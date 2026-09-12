@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 
 from .api import FantasyClient
 from . import events, state
+from .matching import num
 
 CONTESTED_MARGIN_PCT = 0.03   # how far above value to bid if there's competition
 UNCONTESTED_CUSHION = 10      # minimum cushion if nobody else bids
@@ -151,8 +152,11 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
         # HIGHER of salePrice/marketValue — never from a stale first read.
         if fixed_value is not None:
             return fixed_value
-        sale = row.get("salePrice") or 0
-        mval = (row.get("playerMaster") or {}).get("marketValue") or 0
+        # Coerced: LaLiga sends these as strings on some endpoints, and
+        # max("2683751", 0) raises rather than comparing. A TypeError here is a
+        # bid that never leaves.
+        sale = num(row.get("salePrice"))
+        mval = num((row.get("playerMaster") or {}).get("marketValue"))
         return max(sale, mval) or None
 
     def _spent():

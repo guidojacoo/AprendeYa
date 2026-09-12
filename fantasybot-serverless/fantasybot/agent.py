@@ -14,7 +14,7 @@ notifications are built on top (see README / next steps).
 from datetime import date, datetime, timedelta
 
 from . import cache, config, state
-from .matching import match_name, position_of
+from .matching import match_name, num, position_of
 from .strategy import captain as captain_mod
 from .strategy import flip, needs as needs_mod, sell as sell_mod
 from .strategy import lineup as lineup_opt
@@ -88,7 +88,7 @@ def clause_targets(market, team, prob_index):
     """
     gap_positions = set(needs_mod.gaps(team))
     owned = {p["playerMaster"]["id"] for p in team["players"]}
-    money = team["teamMoney"]
+    money = num(team["teamMoney"])
     targets = []
     for el in market:
         # A row whose owner we cannot read is not a clause target: paying one is
@@ -102,13 +102,15 @@ def clause_targets(market, team, prob_index):
         if pos not in gap_positions:
             continue
         pt = el.get("playerTeam", {})
-        clause, unlock = pt.get("buyoutClause"), pt.get("buyoutClauseLockedEndTime")
+        clause = num(pt.get("buyoutClause")) or None
+        unlock = pt.get("buyoutClauseLockedEndTime")
         # If his owner already has him ON SALE, bidding is the cheaper way in: the
         # clause is a ~1.67x premium and it is locked for days, while the sale is open
         # now and starts at his value. The sale is a DOOR OF ITS OWN: gating on an
         # affordable clause first priced reachable listings out of the report just
         # because their (irrelevant) clause was rich.
-        on_sale = el.get("salePrice") if el.get("status") == "on_sale" else None
+        on_sale = ((num(el.get("salePrice")) or None)
+                   if el.get("status") == "on_sale" else None)
         via_clausula = bool(clause and unlock and clause <= money)
         via_puja = bool(on_sale and on_sale <= money)
         if not (via_clausula or via_puja):
