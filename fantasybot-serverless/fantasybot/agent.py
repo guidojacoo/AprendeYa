@@ -156,8 +156,13 @@ def _squad_census(team, market):
     return {
         "counts": needs_mod.squad_counts(team),
         "total": len(players),
-        "listed_now": sum(1 for p in players
-                          if str((p.get("playerMaster") or {}).get("id")) in mine),
+        # Named for WHEN it was counted. The market is read again later in the
+        # review, after the listing phase has run, so a plain "listed_now" next
+        # to a later count of 15 reads as a contradiction when it is only the
+        # same squad before and after going up for sale.
+        "listed_before_review": sum(
+            1 for p in players
+            if str((p.get("playerMaster") or {}).get("id")) in mine),
         "position_ids": sorted({repr((p.get("playerMaster") or {}).get("positionId"))
                                 for p in players}),
         # Whether the squad payload even carries a price. Without one no reserve

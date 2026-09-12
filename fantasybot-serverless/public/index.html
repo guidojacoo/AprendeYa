@@ -220,6 +220,7 @@
         <div class="note">Tocá un jugador para ver el razonamiento.</div>
         <div class="scroll" id="market"></div></section>
       <section><h2>Ofertas recibidas</h2><div id="offers"></div></section>
+      <section><h2>Estado de la plantilla</h2><div id="squadstate"></div></section>
       <section><h2>Qué no llegó a hacer</h2><div id="shortfall"></div></section>
       <section><h2>Oportunidades de compra</h2><div class="scroll" id="flips"></div></section>
       <section><h2>Cláusulas programadas</h2><div id="clauses"></div></section>
@@ -445,6 +446,21 @@ function render(d){
     gap_signings:'fichajes para huecos',bids:'pujas',shield:'blindaje',
     matchday:'alineación de jornada',sources:'fuentes externas',
     reserves:'precios de reserva'};
+  /* Cuántos de la plantilla están en venta, y por qué el resto no. Sin esto,
+     "0 listados" no distingue entre "ya estaban todos" y "no pudo con ninguno". */
+  const sq=rep.squad||{}, lo=(rep.listings||{}).left_out||{};
+  const loRows=Object.entries(lo);
+  $('squadstate').innerHTML=(sq.total!=null||loRows.length)
+    ?((sq.total!=null
+       ?'<div class="row"><div class="m">Plantilla<small>'
+        +esc(Object.entries(sq.counts||{}).map(([k,v])=>k+' '+v).join(' · '))
+        +'</small></div><div class="right">'+esc(sq.total)+'</div></div>':'')
+      +loRows.map(([why,n])=>
+        '<div class="row"><span class="tag '
+        +(why.indexOf('ya estaba')===0?'ok':'warn')+'">'+esc(n)+'</span>'
+        +'<div class="m">'+esc(why)+'</div></div>').join(''))
+    :'<div class="empty">Sin datos de la última revisión.</div>';
+
   $('shortfall').innerHTML=sk.length
     ?('<div class="row"><span class="tag warn">sin tiempo</span><div class="m">'
       +'La última revisión no llegó a: '
