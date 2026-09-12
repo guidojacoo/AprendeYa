@@ -1011,20 +1011,20 @@ def _heal_scheduler_url(store):
     aimed at another deployment on the same database.
     """
     if store.kind != "supabase":
-        return
+        return False
     url = config.self_url()
     if not url:
-        return
+        return False
     try:
         rows = store._request("GET", "scheduler_config",
                               params={"select": "app_url", "limit": "1"})
     except Exception:
-        return          # migration 0002 not applied; nothing to heal
+        return False    # migration 0002 not applied; nothing to heal
     if not rows:
-        return
+        return False
     current = (rows[0].get("app_url") or "").strip()
     if current and not any(h in current.lower() for h in PLACEHOLDER_HOSTS):
-        return          # deliberately set — leave it alone
+        return False    # deliberately set — leave it alone
     try:
         store._request("PATCH", "scheduler_config",
                        params={"id": "eq.1"},
@@ -1036,8 +1036,9 @@ def _heal_scheduler_url(store):
                     f"Corregí la URL del reloj en Supabase: {url}. "
                     f"Estaba en un placeholder, así que nada despertaba al bot.",
                     level="good")
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _note_gap(store):

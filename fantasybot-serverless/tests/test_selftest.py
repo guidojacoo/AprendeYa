@@ -243,6 +243,23 @@ class SelfHealingClock(StorageTestCase):
         written = self._heal("https://TU-APP.vercel.app")
         self.assertEqual(written[0]["app_url"], "https://real.vercel.app")
 
+    def test_it_reports_whether_it_wrote(self):
+        """The health endpoint surfaces this, so it has to be truthful: a repair
+        that happened and one that was unnecessary must not look the same."""
+        from fantasybot import tick as tick_mod
+
+        def run(stored):
+            def fake_request(method, path, params=None, body=None, prefer=None):
+                return [] if stored is None else [{"app_url": stored}]
+            with mock.patch.object(type(self.store), "kind", "supabase"), \
+                 mock.patch.object(self.store, "_request", fake_request,
+                                   create=True):
+                return tick_mod._heal_scheduler_url(self.store)
+
+        self.assertIs(run("https://TU-APP.vercel.app"), True)
+        self.assertIs(run("https://ya-estaba-bien.vercel.app"), False)
+        self.assertIs(run(None), False)
+
     def test_it_replaces_an_empty_url(self):
         self.assertTrue(self._heal(""))
 

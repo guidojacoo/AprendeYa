@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fantasybot import config                            # noqa: E402
+from fantasybot import config, tick                      # noqa: E402
 from fantasybot.storage import get_storage, to_iso, utcnow  # noqa: E402
 from fantasybot.serverless.http import send              # noqa: E402
 
@@ -24,11 +24,28 @@ class handler(BaseHTTPRequestHandler):
             kind = get_storage().kind
         except Exception as e:                            # noqa: BLE001
             storage_ok, kind = False, f"error: {type(e).__name__}"
+
+        # Repair the database's clock if it is still pointing at the migration's
+        # placeholder. Unusual for a health check to write, and deliberate: an
+        # unrepaired placeholder means NOTHING is waking the bot, and the repair
+        # needs a running deployment because only it knows its own address.
+        #
+        # Safe to expose here because it takes no input, derives the value from
+        # this deployment's own environment, and touches nothing once the URL is
+        # real — so it is a single write, not a hit that costs on every request.
+        healed = False
+        if storage_ok:
+            try:
+                healed = bool(tick._heal_scheduler_url(get_storage()))
+            except Exception:                             # noqa: BLE001
+                pass
+
         send(self, 200 if storage_ok else 503, {
             "ok": bool(storage_ok),
             "service": "fantasybot",
             "storage": kind,
             "configured": bool(config.BOT_CRON_SECRET),
+            "clock_repaired": healed,
             "now": to_iso(utcnow()),
         })
 
