@@ -17,12 +17,15 @@ from tests.support import FakeClient, StorageTestCase, listing
 class _Flags(StorageTestCase):
     def setUp(self):
         super().setUp()
-        self._saved = (config.AUTO_EXECUTE, config.AUTO_BIDS, config.AUTO_LINEUP)
+        # NOT `self._saved`: StorageTestCase uses that name, and quietly
+        # overwriting it left its own cleanup unable to restore the temp paths.
+        self._saved_flags = (config.AUTO_EXECUTE, config.AUTO_BIDS,
+                             config.AUTO_LINEUP)
         self.addCleanup(self._restore_flags)
 
     def _restore_flags(self):
         (config.AUTO_EXECUTE, config.AUTO_BIDS,
-         config.AUTO_LINEUP) = self._saved
+         config.AUTO_LINEUP) = self._saved_flags
 
     def _set(self, execute=True, bids=True):
         config.AUTO_EXECUTE, config.AUTO_BIDS = execute, bids
