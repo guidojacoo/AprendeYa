@@ -56,7 +56,7 @@ class SupabaseStorage(Storage):
     def __init__(self, url=None, key=None, scope=None):
         self.url = _project_url(url or config.SUPABASE_URL)
         self.key = key or config.SUPABASE_SERVICE_ROLE_KEY
-        self.scope = scope or config.SCOPE
+        self.scope = scope or config.STORAGE_SCOPE
         if not self.url or not self.key:
             missing = [n for n, v in (("SUPABASE_URL", self.url),
                                       ("SUPABASE_SERVICE_ROLE_KEY", self.key))

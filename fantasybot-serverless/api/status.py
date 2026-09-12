@@ -30,7 +30,7 @@ def _status(handler):
     return 200, {
         "ok": True,
         "now": to_iso(utcnow()),
-        "scope": config.SCOPE,
+        "scope": config.STORAGE_SCOPE,
         "storage": store.kind,
         "llm": describe_llm(),
         "autonomy": {

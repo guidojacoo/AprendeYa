@@ -77,6 +77,8 @@ TOKEN_ENDPOINT = f"{OAUTH_BASE}/token"
 SIGNIN_POLICY = "B2C_1A_5ULAIP_PARAMETRIZED_SIGNIN"
 CLIENT_ID = "af88bcff-1157-40a0-b579-030728aacf0b"
 REDIRECT_URI = "authredirect://com.lfp.laligafantasy"
+# OAuth scope. `offline_access` is what grants the refresh_token — without it the
+# session dies in 24h instead of lasting 90 days, so nothing may shadow this name.
 SCOPE = "openid offline_access"
 
 # --- External sources ---
@@ -139,8 +141,13 @@ STORAGE_BACKEND = _env(
     "FANTASYBOT_STORAGE",
     "supabase" if (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY) else "local")
 
-# One database can serve several teams/leagues: every row is namespaced by scope.
-SCOPE = _env("FANTASYBOT_SCOPE", "default")
+# One database can serve several teams/leagues: every row is namespaced.
+#
+# NOT named SCOPE: that name is already taken above by the OAuth scope, and
+# defining it twice in one module silently replaced "openid offline_access" with
+# "default" — LaLiga then issued no refresh_token and the login URL 404'd. A
+# regression test pins both names now.
+STORAGE_SCOPE = _env("FANTASYBOT_SCOPE", "default")
 
 # --- serverless tick ---------------------------------------------------------
 BOT_CRON_SECRET = _env("BOT_CRON_SECRET")
