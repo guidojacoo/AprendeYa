@@ -12,10 +12,10 @@ These tests exercise URL and payload construction with no network at all.
 
 import unittest
 import urllib.parse
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fantasybot.storage import PENDING, RUNNING, to_iso
-from fantasybot.storage.supabase import SupabaseStorage, _project_url
+from fantasybot.storage.supabase import SupabaseStorage
 
 NOW = datetime(2026, 9, 12, 0, 21, 8, 371615, tzinfo=timezone.utc)
 
