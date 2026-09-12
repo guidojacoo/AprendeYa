@@ -37,9 +37,14 @@ def _run(handler):
         return str(params.get(name, "")).lower() in ("1", "true", "yes", "on")
 
     mode = "sniper" if params.get("mode") == "sniper" else "tick"
+    # Who woke us. Recorded so "is anything actually scheduling this?" has an
+    # answer — a run triggered by hand is indistinguishable from an automated one
+    # until you ask where it came from.
+    src = str(params.get("src") or "unknown")[:20]
     lines = []
     result = tick.run(mode=mode, dry_run=flag("dry_run"),
-                      force_review=flag("force"), log=lines.append)
+                      force_review=flag("force"), log=lines.append,
+                      source=src)
     result["log"] = lines[-40:]
     return (200 if result.get("ok") else 500), result
 

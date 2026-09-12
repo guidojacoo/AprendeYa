@@ -86,7 +86,7 @@ jobs:
                  -X POST \
                  -H "Authorization: Bearer ${SECRET}" \
                  -H "Content-Type: application/json" \
-                 "${APP_URL}/api/tick?mode=$1&force=${FORCE:-0}&dry_run=${DRY:-0}" \
+                 "${APP_URL}/api/tick?mode=$1&src=github&force=${FORCE:-0}&dry_run=${DRY:-0}" \
               || echo '{}'
           }
 

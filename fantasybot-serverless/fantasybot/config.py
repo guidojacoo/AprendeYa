@@ -156,6 +156,27 @@ BOT_CRON_SECRET = _env("BOT_CRON_SECRET")
 VERCEL_CRON_SECRET = _env("CRON_SECRET")
 VERCEL_APP_URL = (_env("VERCEL_APP_URL") or "").rstrip("/")
 
+
+def self_url():
+    """Where this deployment actually lives, as the deployment itself sees it.
+
+    Vercel injects these, so a running function always knows its own address
+    without anyone configuring it — which is what lets the bot repair a scheduler
+    row that was left pointing at a placeholder. Preference order matters:
+    VERCEL_PROJECT_PRODUCTION_URL is the stable production domain, while
+    VERCEL_URL is per-deployment and changes on every push, so it is only a last
+    resort.
+    """
+    for value in (VERCEL_APP_URL,
+                  _env("VERCEL_PROJECT_PRODUCTION_URL"),
+                  _env("VERCEL_URL")):
+        if value:
+            value = value.strip().rstrip("/")
+            if not value.startswith("http"):
+                value = f"https://{value}"
+            return value
+    return ""
+
 # A Vercel Hobby function is killed at 60s. We stop well before that so the tick
 # always gets to write its state and close its execution row.
 TICK_BUDGET_SECONDS = _int("TICK_BUDGET_SECONDS", 45)

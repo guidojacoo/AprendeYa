@@ -63,7 +63,9 @@ begin
   end if;
 
   select net.http_post(
-    url     := cfg.app_url || '/api/tick?mode=' || mode,
+    -- `src` is how the diagnosis can tell an automated wake-up from one you
+    -- triggered by hand; they are otherwise identical in the log.
+    url     := cfg.app_url || '/api/tick?mode=' || mode || '&src=db',
     headers := jsonb_build_object(
                  'Authorization', 'Bearer ' || cfg.bot_secret,
                  'Content-Type',  'application/json'),

@@ -887,7 +887,7 @@ def run_llm_strategy(ctx, force=False):
 # The tick itself
 # =============================================================================
 def run(mode="tick", dry_run=False, force_review=False, log=print,
-        budget_seconds=None):
+        budget_seconds=None, source=None):
     """Run one tick. Always returns a JSON-serializable summary — including when
     it fails, because a tick that dies silently is a bot you cannot debug."""
     store = get_storage()
@@ -898,10 +898,12 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
                                           else config.TICK_BUDGET_SECONDS),
         dry_run=dry_run, log=log, mode=mode)
     execution_id = None
-    summary = {"mode": mode, "started_at": to_iso(utcnow()), "dry_run": dry_run}
+    summary = {"mode": mode, "started_at": to_iso(utcnow()), "dry_run": dry_run,
+               "source": source or "unknown"}
 
     try:
-        execution_id = store.start_execution(mode)
+        execution_id = store.start_execution(
+            f"{mode}:{source}" if source else mode)
     except Exception as e:                       # noqa: BLE001
         # No database, no tick. Say so loudly rather than pretending to work.
         return {"ok": False, "error": f"storage unavailable: {e}", **summary}
@@ -939,6 +941,7 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         store.finish_execution(execution_id, DONE, summary=summary)
         _note_health(store, ok=True)
         _check_token_expiry(store)
+        _heal_scheduler_url(store)
         return summary
     except Exception as e:                       # noqa: BLE001
         net.clear_deadline()
@@ -989,6 +992,52 @@ def _note_health(store, ok, error=None):
 # cron is the independent witness: when it fires and finds the last tick was
 # hours rather than minutes ago, the scheduler is dead and we say so.
 SCHEDULER_GAP_ALERT = 3600
+
+
+PLACEHOLDER_HOSTS = ("tu-app", "your-app", "tu-dominio")
+
+
+def _heal_scheduler_url(store):
+    """Point the database's clock at wherever this deployment actually is.
+
+    The scheduler migration ships a placeholder URL you are meant to replace, and
+    an unreplaced one fails in the worst possible way: pg_net cheerfully posts to
+    a domain that does not resolve, every minute, forever, and nothing is ever
+    woken. No error, no log, no symptom except a bot that quietly does nothing.
+
+    A running function knows its own address, so it can simply fix the row. It
+    only writes when the stored value is a placeholder or empty — never to
+    override a URL somebody chose deliberately, which would hijack a scheduler
+    aimed at another deployment on the same database.
+    """
+    if store.kind != "supabase":
+        return
+    url = config.self_url()
+    if not url:
+        return
+    try:
+        rows = store._request("GET", "scheduler_config",
+                              params={"select": "app_url", "limit": "1"})
+    except Exception:
+        return          # migration 0002 not applied; nothing to heal
+    if not rows:
+        return
+    current = (rows[0].get("app_url") or "").strip()
+    if current and not any(h in current.lower() for h in PLACEHOLDER_HOSTS):
+        return          # deliberately set — leave it alone
+    try:
+        store._request("PATCH", "scheduler_config",
+                       params={"id": "eq.1"},
+                       body={"app_url": url, "updated_at": to_iso(utcnow())},
+                       prefer="return=minimal")
+        events.emit("note", f"Reloj de la base apuntado a {url}",
+                    detail={"was": current or "(vacío)"})
+        notify.send("scheduler_url_fixed",
+                    f"Corregí la URL del reloj en Supabase: {url}. "
+                    f"Estaba en un placeholder, así que nada despertaba al bot.",
+                    level="good")
+    except Exception:
+        pass
 
 
 def _note_gap(store):
