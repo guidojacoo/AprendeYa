@@ -24,10 +24,17 @@ def _path(key: str) -> str:
     return os.path.join(CACHE_DIR, safe + ".json")
 
 
-def cached(key: str, ttl_seconds: int, producer):
+def cached(key: str, ttl_seconds: int, producer, default=None):
     """Returns the cached value if fresh; otherwise calls producer and stores it.
 
     producer must return something JSON-serializable.
+
+    A producer that FAILS returns `default` rather than raising. This is what
+    lets a run survive a source going down or running out of time: an agent that
+    decides with one fewer signal still plays the gameweek, while one that raises
+    out of its daily review does nothing at all — and the scraped sources are
+    exactly the ones that fail (site redesigns, rate limits, a slow network
+    against a function that is killed at 60 seconds).
     """
     store = get_storage()
     try:
@@ -37,7 +44,10 @@ def cached(key: str, ttl_seconds: int, producer):
     if hit is not None:
         return hit
 
-    value = producer()
+    try:
+        value = producer()
+    except Exception:
+        return default
     try:
         store.cache_put(key, value, ttl_seconds)
     except Exception:

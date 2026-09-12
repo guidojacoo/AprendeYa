@@ -16,14 +16,30 @@ sell anybody — you run this when things are already strange.
 
 import time
 
-from . import config, notify
+from . import config, net, notify
 from .storage import get_storage, parse_iso, to_iso, utcnow
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
 
+# A diagnosis runs in the same 60-second box everything else does, and a probe
+# that scrapes or calls an LLM can eat most of it. Running out of time must not
+# turn the report into Vercel's HTML error page — the whole point is to SEE what
+# is wrong.
+BUDGET_SECONDS = 40
+
+_deadline = [0.0]
+
+
+def _out_of_time(margin=2.0):
+    return time.monotonic() + margin >= _deadline[0]
+
+
 def _check(name, fn, optional=False):
     """Run one probe. Its failure is data, not an exception."""
+    if _out_of_time():
+        return {"check": name, "status": WARN, "ms": 0,
+                "detail": "Sin tiempo para comprobarlo en esta pasada."}
     started = time.monotonic()
     try:
         status, detail = fn()
@@ -122,6 +138,29 @@ def _scheduler():
     return OK, f"Última ejecución hace {mins:.0f} min ({last.get('status')})."
 
 
+def _db_scheduler():
+    """Whether the database is waking the bot itself (migration 0002).
+
+    Worth its own line because it is the difference between depending on
+    GitHub's best-effort scheduler and owning your clock.
+    """
+    store = get_storage()
+    if store.kind != "supabase":
+        return WARN, "Sin Supabase no hay reloj en la base."
+    try:
+        rows = store._request("GET", "scheduler_config",
+                              params={"select": "app_url,enabled", "limit": "1"})
+    except Exception:
+        return WARN, ("No está aplicado 0002_scheduler.sql. El bot depende del "
+                      "cron de GitHub, que es best-effort. Aplicalo para que la "
+                      "propia base lo despierte cada minuto.")
+    if not rows:
+        return WARN, "scheduler_config existe pero está vacía."
+    if not rows[0].get("enabled"):
+        return WARN, "El reloj de la base está desactivado (enabled = false)."
+    return OK, f"La base despierta al bot cada minuto ({rows[0].get('app_url')})."
+
+
 def _llm():
     from .llm import client as llm_client
     if not llm_client.enabled():
@@ -152,8 +191,19 @@ def _autonomy():
     return OK, "Autonomía completa: alinea, puja, vende, clausula y blinda."
 
 
-def run():
+def run(budget_seconds=BUDGET_SECONDS):
     """Every check, in dependency order. Returns a JSON-serialisable report."""
+    _deadline[0] = time.monotonic() + budget_seconds
+    # Scrapes obey the same clock, so a cold cache cannot spend the whole
+    # diagnosis being polite to a website.
+    net.set_deadline(_deadline[0])
+    try:
+        return _run()
+    finally:
+        net.clear_deadline()
+
+
+def _run():
     results = [_check("Almacenamiento (Supabase)", _storage),
                _check("Sesión de LaLiga", _tokens)]
 
@@ -174,6 +224,7 @@ def run():
 
     results += [_check("Fuentes externas", _sources, optional=True),
                 _check("Scheduler", _scheduler),
+                _check("Reloj en la base", _db_scheduler, optional=True),
                 _check("LLM", _llm, optional=True),
                 _check("Avisos", _notifications, optional=True),
                 _check("Autonomía", _autonomy)]

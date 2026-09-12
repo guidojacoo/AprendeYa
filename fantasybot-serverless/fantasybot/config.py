@@ -219,6 +219,10 @@ CASH_RESERVE = _int("FANTASYBOT_CASH_RESERVE", 0)
 MAX_CLAUSE = _int("FANTASYBOT_MAX_CLAUSE", 0)
 # How early (minutes) before a kickoff to re-optimise the lineup.
 LINEUP_LEAD_MINUTES = _int("FANTASYBOT_LINEUP_LEAD_MINUTES", 25)
+# Pages of league activity to walk per review while backfilling history. Small
+# enough that a review always fits inside a Vercel function's 60 seconds; the
+# cursor is remembered, so the history still completes over a few runs.
+ACTIVITY_PAGES_PER_RUN = _int("FANTASYBOT_ACTIVITY_PAGES_PER_RUN", 6)
 
 # --- notifications -----------------------------------------------------------
 # A bot you cannot see is a bot you cannot trust, and every way this one dies is
