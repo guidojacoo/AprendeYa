@@ -63,7 +63,15 @@ def evaluate(element, index, horizon, today_iso=None):
     if fantasy_value and abs(trend["valor"] - fantasy_value) / fantasy_value > SANITY_MAX_DIFF:
         return None  # name match probably wrong
 
-    if element["discr"] == "marketPlayerLeague":
+    # `.get`, not `[...]`: LaLiga ships market rows without `discr`, and a bare
+    # subscript turned one of them into a KeyError that killed the whole review —
+    # so nothing was listed, no reserve prices were written, and the squad sat on
+    # the market with nobody reading its offers. Everywhere else in this codebase
+    # already reads it defensively; these three places did not.
+    #
+    # An unknown row falls into the manager-owned branch, which needs a buyout
+    # clause and bails out cleanly without one. That is a refusal, not a guess.
+    if element.get("discr") == "marketPlayerLeague":
         sale_p = element.get("salePrice") or 0
         mv = pm.get("marketValue") or 0
         trend_val = trend.get("valor") or 0

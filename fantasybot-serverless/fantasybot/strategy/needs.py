@@ -65,7 +65,7 @@ def candidates(client, league_id, position, prob_index=None, money=None, owned=N
         if pm.get("id") in owned:
             continue  # already yours
         clause = sale = None
-        if el["discr"] == "marketPlayerLeague":
+        if el.get("discr") == "marketPlayerLeague":
             via, price = "SISTEMA", el.get("salePrice") or pm.get("marketValue")
         else:
             clause = el.get("playerTeam", {}).get("buyoutClause")

@@ -138,6 +138,9 @@ jobs:
 
           if [ "$(echo "$BODY" | jq -r '.ok // false')" != "true" ]; then
             echo "::error::tick failed: $(echo "$BODY" | jq -r '.error // "no response"')"
+            # The trace, not just the message. Working out WHERE a KeyError came
+            # from by reading the source cost a deploy cycle.
+            echo "$BODY" | jq -r '.traceback // empty'
             exit 1
           fi
 

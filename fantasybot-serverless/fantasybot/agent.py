@@ -91,7 +91,9 @@ def clause_targets(market, team, prob_index):
     money = team["teamMoney"]
     targets = []
     for el in market:
-        if el["discr"] != "marketPlayerTeam":
+        # A row whose owner we cannot read is not a clause target: paying one is
+        # irreversible, so an unknown shape is skipped rather than assumed.
+        if el.get("discr") != "marketPlayerTeam":
             continue
         pm = el["playerMaster"]
         if pm["id"] in owned:

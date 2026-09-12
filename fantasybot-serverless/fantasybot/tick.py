@@ -1053,6 +1053,7 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
                                           else config.TICK_BUDGET_SECONDS),
         dry_run=dry_run, log=log, mode=mode)
     execution_id = None
+    failed = []          # phases that raised: contained, reported, never hidden
     summary = {"mode": mode, "started_at": to_iso(utcnow()), "dry_run": dry_run,
                "source": source or "unknown"}
 
@@ -1084,7 +1085,24 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         # A sniper tick exists only to hit a close; it must not spend its seconds
         # on a market review.
         if mode != "sniper" and not ctx.out_of_time(margin=15):
-            summary["review"] = run_review(ctx, force=force_review)
+            # Contained, like the offer handling above it. One unexpected row in
+            # the market used to raise out of the review and take the whole tick
+            # with it — the health note, the token check and the scheduler repair
+            # all skipped, and the tick recorded as a failure. The review is the
+            # biggest thing here and the likeliest to meet something new; it is
+            # not a reason for everything else to stop.
+            try:
+                summary["review"] = run_review(ctx, force=force_review)
+            except Exception as e:               # noqa: BLE001
+                summary["review"] = {
+                    "status": "error", "error": f"{type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc()[-1200:]}
+                events.emit("error", f"Falló la revisión: {e}", status="error")
+                # Contained, but NOT quiet. The tick finishes its other work
+                # instead of dying halfway through it, and still reports failure
+                # so the scheduler's job goes red and somebody finds out. A green
+                # light over a broken mechanism is the thing that hides for days.
+                failed.append(f"review: {type(e).__name__}: {e}")
             if not ctx.out_of_time(margin=10):
                 summary["llm"] = run_llm_strategy(ctx)
 
@@ -1092,13 +1110,21 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         summary["sleep_seconds"] = _sleep_hint()
         summary["pending"] = len(store.pending_actions(limit=50))
         net.clear_deadline()
-        summary["ok"] = True
+        summary["ok"] = not failed
+        if failed:
+            # The cause, not just the phase: "review falló" sends you looking,
+            # "review: KeyError: 'discr'" tells you where. The trace goes at the
+            # top level as well as inside the phase, because that is where
+            # anything looking at a failed tick looks first.
+            summary["error"] = "; ".join(failed)
+            summary["traceback"] = (summary.get("review") or {}).get("traceback")
         # Before the execution is filed, so the dashboard's own record of this
         # run carries it too — not only the caller that happened to ask.
         summary["clock"] = _clock_report(store, source)
         summary["duration_seconds"] = round(time.monotonic() - started, 2)
-        store.finish_execution(execution_id, DONE, summary=summary)
-        _note_health(store, ok=True)
+        store.finish_execution(execution_id, DONE if not failed else FAILED,
+                               summary=summary)
+        _note_health(store, ok=not failed, error=summary.get("error"))
         _check_token_expiry(store)
         _heal_scheduler_url(store)
         return summary
