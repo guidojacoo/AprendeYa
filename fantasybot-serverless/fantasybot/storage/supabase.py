@@ -77,10 +77,23 @@ class SupabaseStorage(Storage):
         self.rest = f"{self.url}/rest/v1"
 
     # --- HTTP ----------------------------------------------------------------
-    def _request(self, method, path, params=None, body=None, prefer=None):
+    # Characters PostgREST needs to read literally in a query string.
+    #
+    # `+` is deliberately NOT here. An ISO timestamp carries its UTC offset as
+    # "+00:00", and a literal `+` in a query string decodes to a SPACE — so every
+    # timestamp filter reached Postgres as "2026-09-12T00:21:08.371615 00:00" and
+    # was rejected as invalid syntax. That broke due_actions, claim_action and
+    # pending_actions: the entire queue, silently, only against Supabase.
+    SAFE_CHARS = "().,*:-"
+
+    def _build_url(self, path, params=None):
         url = f"{self.rest}/{path}"
         if params:
-            url += "?" + urllib.parse.urlencode(params, safe="().,*:+-")
+            url += "?" + urllib.parse.urlencode(params, safe=self.SAFE_CHARS)
+        return url
+
+    def _request(self, method, path, params=None, body=None, prefer=None):
+        url = self._build_url(path, params)
         headers = {
             "apikey": self.key,
             "Authorization": f"Bearer {self.key}",
