@@ -19,12 +19,26 @@ class FakeHandler:
         self.path = path
 
 
+def _forget_shared_secret():
+    """The cached copy of the database's secret is module state; a test that
+    leaves it set would hand its value to the next one."""
+    http._shared.update({"value": None, "at": 0.0})
+
+
 class Authorization(unittest.TestCase):
     def setUp(self):
         self._saved = (config.BOT_CRON_SECRET, config.VERCEL_CRON_SECRET)
         config.BOT_CRON_SECRET = "s3cr3t"
         config.VERCEL_CRON_SECRET = None
+        _forget_shared_secret()
+        self.addCleanup(_forget_shared_secret)
         self.addCleanup(self._restore)
+        # These cases are about the environment's secret alone, so the database
+        # is held at "has nothing" rather than left to whatever the test machine
+        # happens to be configured with.
+        patcher = mock.patch.object(http, "shared_secret", return_value="")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _restore(self):
         config.BOT_CRON_SECRET, config.VERCEL_CRON_SECRET = self._saved
@@ -63,6 +77,7 @@ class Authorization(unittest.TestCase):
             FakeHandler({"Authorization": "Bearer anything"})))
         self.assertFalse(http.authorized(FakeHandler({"X-Cron-Secret": ""})))
 
+
     def test_vercel_cron_secret_is_also_accepted(self):
         config.BOT_CRON_SECRET = "github-one"
         config.VERCEL_CRON_SECRET = "vercel-one"
@@ -78,6 +93,66 @@ class Authorization(unittest.TestCase):
             FakeHandler({"Authorization": "Bearer s3cr"})))
         self.assertFalse(http.authorized(
             FakeHandler({"Authorization": "Bearer s3cr3t-extra"})))
+
+
+class TheSecretTheSchedulerWasGiven(unittest.TestCase):
+    """The database's copy is a credential too.
+
+    BOT_CRON_SECRET is a seed, not the authority. When the environment is
+    missing it — added after the last build, set on the wrong environment — the
+    deployment refuses its own clock, and that failure is invisible from both
+    ends: pg_cron reports success because net.http_post only queues the request,
+    and Vercel answers 401 before a line of our code runs.
+    """
+
+    def setUp(self):
+        self._saved = (config.BOT_CRON_SECRET, config.VERCEL_CRON_SECRET)
+        config.BOT_CRON_SECRET = None
+        config.VERCEL_CRON_SECRET = None
+        _forget_shared_secret()
+        self.addCleanup(_forget_shared_secret)
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        config.BOT_CRON_SECRET, config.VERCEL_CRON_SECRET = self._saved
+
+    def test_the_stored_secret_is_accepted(self):
+        with mock.patch.object(http, "shared_secret", return_value="de-la-base"):
+            self.assertTrue(http.authorized(
+                FakeHandler({"Authorization": "Bearer de-la-base"})))
+            self.assertFalse(http.authorized(
+                FakeHandler({"Authorization": "Bearer otra-cosa"})))
+
+    def test_no_secret_anywhere_still_fails_closed(self):
+        with mock.patch.object(http, "shared_secret", return_value=""):
+            self.assertFalse(http.authorized(
+                FakeHandler({"Authorization": "Bearer lo-que-sea"})))
+
+    def test_a_bare_probe_never_touches_the_database(self):
+        """Otherwise a crawler turns every one of its requests into a query."""
+        with mock.patch.object(http, "shared_secret") as lookup:
+            self.assertFalse(http.authorized(FakeHandler()))
+        lookup.assert_not_called()
+
+    def test_the_environment_wins_without_a_lookup(self):
+        config.BOT_CRON_SECRET = "el-de-vercel"
+        with mock.patch.object(http, "shared_secret") as lookup:
+            self.assertTrue(http.authorized(
+                FakeHandler({"Authorization": "Bearer el-de-vercel"})))
+        lookup.assert_not_called()
+
+    def test_it_is_read_once_and_cached(self):
+        store = mock.Mock(kind="supabase")
+        store._request.return_value = [{"bot_secret": "de-la-base"}]
+        with mock.patch("fantasybot.storage.get_storage", return_value=store):
+            self.assertEqual(http.shared_secret(), "de-la-base")
+            self.assertEqual(http.shared_secret(), "de-la-base")
+        self.assertEqual(store._request.call_count, 1)
+
+    def test_an_unreachable_database_is_not_an_open_door(self):
+        with mock.patch("fantasybot.storage.get_storage",
+                        side_effect=RuntimeError("down")):
+            self.assertEqual(http.shared_secret(), "")
 
 
 class GuardedEndpoint(unittest.TestCase):

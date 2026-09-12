@@ -19,6 +19,7 @@ the tick tells the GitHub Actions runner "come back in 214 seconds and hold",
 and the runner does the waiting for free.
 """
 
+import secrets
 import time
 import traceback
 from datetime import date, timedelta
@@ -1004,6 +1005,7 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         _note_health(store, ok=True)
         _check_token_expiry(store)
         _heal_scheduler_url(store)
+        summary["clock"] = _clock_report(store, source)
         return summary
     except Exception as e:                       # noqa: BLE001
         net.clear_deadline()
@@ -1059,6 +1061,27 @@ SCHEDULER_GAP_ALERT = 3600
 PLACEHOLDER_HOSTS = ("tu-app", "your-app", "tu-dominio")
 
 
+def _clock_report(store, source):
+    """What the database's own clock is doing, folded into the tick's answer.
+
+    The database schedules itself and reports its own success, so when its calls
+    are being refused there is nowhere that failure shows up: pg_cron logs
+    `succeeded` (net.http_post only queues the request), Vercel answers 401
+    before our code runs, and the tick that never happened leaves no trace. The
+    only place both halves are visible at once is a tick woken by something else,
+    so that tick asks.
+
+    Skipped when the database is what woke us — the answer is then obvious — and
+    kept to counts, so it costs one small query on the GitHub-driven ticks only.
+    """
+    if source == "db" or store.kind != "supabase":
+        return None
+    try:
+        return store._request("POST", "rpc/fantasybot_clock_status") or None
+    except Exception:                            # noqa: BLE001
+        return None
+
+
 def _heal_scheduler_url(store):
     """Point the database's clock at this deployment, with this deployment's key.
 
@@ -1075,17 +1098,26 @@ def _heal_scheduler_url(store):
     other one's scheduler would be worse than the problem. The secret is
     different: a mismatched one is never intentional, it is always the reason
     every call is refused, so it is simply kept in sync.
+
+    When the environment has no secret at all — added after the last build, set
+    on the wrong environment, never set — there is nothing to sync and the clock
+    would stay locked out forever. So one is minted here and stored, and the
+    request guard accepts the stored value (see serverless/http.shared_secret).
+    The deployment and its database end up agreeing on a key neither a person nor
+    a crawler ever sees, which is the only state in which the bot can wake.
     """
     if store.kind != "supabase":
         return False
     url = config.self_url()
     secret = config.BOT_CRON_SECRET
-    if not (url or secret):
-        return False
+    # Read the row the clock actually reads. `fantasybot_wake` selects id = 1, so
+    # inspecting "the first row" and writing to id = 1 can be two different rows
+    # the moment the table holds more than one — the repair then reports success
+    # having changed nothing, which is the most expensive kind of green there is.
     try:
         rows = store._request("GET", "scheduler_config",
                               params={"select": "app_url,bot_secret",
-                                      "limit": "1"})
+                                      "id": "eq.1", "limit": "1"})
     except Exception:
         return False    # migration 0002 not applied; nothing to heal
     if not rows:
@@ -1096,26 +1128,46 @@ def _heal_scheduler_url(store):
     if url and (not current_url
                 or any(h in current_url.lower() for h in PLACEHOLDER_HOSTS)):
         patch["app_url"] = url
-    if secret and (rows[0].get("bot_secret") or "") != secret:
-        patch["bot_secret"] = secret
+    stored_secret = (rows[0].get("bot_secret") or "").strip()
+    minted = False
+    if secret:
+        if stored_secret != secret:
+            patch["bot_secret"] = secret
+    elif not stored_secret:
+        patch["bot_secret"] = secrets.token_urlsafe(32)
+        minted = True
     if not patch:
         return False
 
+    wanted = dict(patch)
     try:
         patch["updated_at"] = to_iso(utcnow())
         store._request("PATCH", "scheduler_config", params={"id": "eq.1"},
                        body=patch, prefer="return=minimal")
-        fixed = " y ".join(
-            {"app_url": f"la URL ({url})",
-             "bot_secret": "el secreto"}[k] for k in patch if k != "updated_at")
-        events.emit("note", f"Reloj de la base: corregí {fixed}")
-        notify.send("scheduler_config_fixed",
-                    f"Corregí {fixed} en el reloj de Supabase. Estaba "
-                    f"desalineado, así que sus llamadas se rechazaban.",
-                    level="good")
-        return True
+        # Read it back. A PATCH that matches no row succeeds — 200, empty, no
+        # complaint — so "the write did not raise" is not evidence the value
+        # changed. Announcing a repair that did not happen is worse than
+        # announcing nothing: it sends you looking somewhere else.
+        after = store._request("GET", "scheduler_config",
+                               params={"select": "app_url,bot_secret",
+                                       "id": "eq.1", "limit": "1"}) or [{}]
+        landed = [k for k, v in wanted.items()
+                  if str(after[0].get(k) or "").strip() == v]
     except Exception:
         return False
+    if not landed:
+        return False
+
+    labels = {"app_url": f"la URL ({url})",
+              "bot_secret": ("un secreto nuevo (Vercel no tiene "
+                             "BOT_CRON_SECRET)" if minted else "el secreto")}
+    fixed = " y ".join(labels[k] for k in landed)
+    events.emit("note", f"Reloj de la base: corregí {fixed}")
+    notify.send("scheduler_config_fixed",
+                f"Corregí {fixed} en el reloj de Supabase. Estaba "
+                f"desalineado, así que sus llamadas se rechazaban.",
+                level="good")
+    return True
 
 
 # An execution left `running` was killed before it could write its own ending —

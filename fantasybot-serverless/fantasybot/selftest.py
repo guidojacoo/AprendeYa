@@ -163,7 +163,8 @@ def _db_scheduler():
         return WARN, "Sin Supabase no hay reloj en la base."
     try:
         rows = store._request("GET", "scheduler_config",
-                              params={"select": "app_url,enabled", "limit": "1"})
+                              params={"select": "app_url,enabled,bot_secret",
+                                      "limit": "1"})
     except Exception:
         return WARN, ("No está aplicado 0002_scheduler.sql. El bot depende del "
                       "cron de GitHub, que es best-effort. Aplicalo para que la "
@@ -186,6 +187,19 @@ def _db_scheduler():
     if not url.startswith("https://"):
         return WARN, f"app_url no es https: {url}"
 
+    # The secret is the other half of the same failure, and the quieter one: a
+    # wrong URL at least fails visibly, a wrong secret produces a 401 that never
+    # reaches our code and a cron job that reports success anyway.
+    stored = (rows[0].get("bot_secret") or "").strip()
+    if not stored:
+        return FAIL, ("scheduler_config.bot_secret está vacío: la base llama a "
+                      "Vercel sin credencial y recibe 401 cada minuto. Recargá "
+                      "esta página y la función escribe uno sola.")
+    if config.BOT_CRON_SECRET and stored != config.BOT_CRON_SECRET:
+        return FAIL, ("El secreto de la base no coincide con BOT_CRON_SECRET de "
+                      "Vercel, así que sus llamadas se rechazan. Recargá esta "
+                      "página: la función lo sincroniza sola.")
+
     # The config row existing is NOT the clock running. That distinction cost a
     # night: scheduler_config was there, every check went green, and the cron job
     # had never been created — so nothing woke the bot at all. Ask the database
@@ -207,10 +221,14 @@ def _db_scheduler():
         return WARN, (f"El cron está creado pero solo corrió {runs} veces en la "
                       f"última hora (deberían ser ~60).")
     if failed and not status.get("http_ok"):
+        # Not the secret — that was just checked against this very deployment.
+        # What is left is the URL pointing at a different deployment, or Vercel
+        # refusing before our code runs (Deployment Protection).
         return FAIL, (f"El cron corre ({runs}/h) pero las {failed} llamadas a "
-                      f"Vercel fallaron — casi siempre es que bot_secret no "
-                      f"coincide con BOT_CRON_SECRET. Recargá esta página: la "
-                      f"función sincroniza el secreto sola al arrancar.")
+                      f"Vercel fallaron, y no es el secreto. Mirá si {url} es "
+                      f"esta misma app y si tiene Deployment Protection activada "
+                      f"(Vercel > Settings > Deployment Protection), que "
+                      f"responde 401 antes de llegar al bot.")
     return OK, (f"La base despierta al bot cada minuto ({runs} veces la última "
                 f"hora, {status.get('http_ok', 0)} respuestas OK).")
 

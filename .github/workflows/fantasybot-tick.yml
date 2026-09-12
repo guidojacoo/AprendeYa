@@ -97,7 +97,16 @@ jobs:
           BODY="$(call tick)"
           echo "$BODY" | jq -C '{ok, mode, duration_seconds, pending, next_deadline,
                                   sleep_seconds, actions, review: (.review.status // null),
-                                  error}' 2>/dev/null || echo "$BODY"
+                                  clock, error}' 2>/dev/null || echo "$BODY"
+
+          # The other clock, reported by the one that woke us. pg_cron cannot tell
+          # you its calls are being refused — net.http_post only queues them — so
+          # this run is the only place the failure is visible.
+          if [ "$(echo "$BODY" | jq -r '.clock.scheduled // true')" != "true" ]; then
+            echo "::warning::the database cron is not scheduled; apply supabase/migrations/0003_clock_status.sql"
+          elif [ "$(echo "$BODY" | jq -r '(.clock.http_ok // 1) == 0 and (.clock.http_failed // 0) > 0')" = "true" ]; then
+            echo "::warning::the database cron runs but Vercel refuses every call: $(echo "$BODY" | jq -c '.clock')"
+          fi
 
           if [ "$(echo "$BODY" | jq -r '.ok // false')" != "true" ]; then
             echo "::error::tick failed: $(echo "$BODY" | jq -r '.error // "no response"')"

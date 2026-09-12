@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import sys
+import time
 import traceback
 import urllib.parse
 
@@ -56,22 +57,67 @@ def presented_secret(handler):
     return (query(handler).get("token") or "").strip()
 
 
-def authorized(handler):
-    """Constant-time check against BOT_CRON_SECRET.
+# How long a deployment trusts its cached copy of the scheduler's secret. Short
+# enough that changing it takes effect within minutes; long enough that someone
+# hammering /api/tick cannot turn every request into a database read.
+SHARED_SECRET_TTL = 300
 
-    An unset secret is a hard NO, never an open door: a misconfigured deployment
-    must fail closed, or the first thing to find /api/tick would be a crawler.
+_shared = {"value": None, "at": 0.0}
+
+
+def shared_secret():
+    """The secret the scheduler was handed, read back from the database.
+
+    BOT_CRON_SECRET is a seed, not the authority. A deployment whose environment
+    is missing it — added after the last build, set on the wrong environment,
+    never set at all — refuses every call from its own clock, and that failure is
+    invisible from both ends: pg_cron reports success because net.http_post is
+    fire-and-forget, Vercel answers 401 before a line of our code runs, and the
+    bot simply never wakes. This cost a night of 401s.
+
+    Accepting the value the database holds closes that hole without weakening
+    anything. Reading it needs the service-role key, which is exactly as private
+    as the environment variable it stands in for.
+    """
+    now = time.monotonic()
+    if _shared["value"] is not None and now - _shared["at"] < SHARED_SECRET_TTL:
+        return _shared["value"]
+    value = ""
+    try:
+        from ..storage import get_storage
+        store = get_storage()
+        if store.kind == "supabase":
+            rows = store._request("GET", "scheduler_config",
+                                  params={"select": "bot_secret", "limit": "1"})
+            value = str((rows or [{}])[0].get("bot_secret") or "").strip()
+    except Exception:                            # noqa: BLE001
+        value = ""                               # no database, no fallback
+    _shared.update({"value": value, "at": now})
+    return value
+
+
+def authorized(handler):
+    """Constant-time check against the secrets this deployment accepts.
+
+    No secret anywhere is a hard NO, never an open door: a misconfigured
+    deployment must fail closed, or the first thing to find /api/tick would be a
+    crawler.
     """
     presented = str(presented_secret(handler))
-    accepted = [s for s in (config.BOT_CRON_SECRET, config.VERCEL_CRON_SECRET) if s]
-    if not accepted:
+    # A bare probe is refused without touching the database, so a crawler cannot
+    # make each of its requests cost a query.
+    if not presented:
         return False
+    accepted = [s for s in (config.BOT_CRON_SECRET, config.VERCEL_CRON_SECRET) if s]
     # compare_digest on every candidate (no early exit) so a mismatch takes the
     # same time whichever secret it was checked against.
     ok = False
     for secret in accepted:
         ok |= hmac.compare_digest(presented, str(secret))
-    return ok
+    if ok:
+        return True
+    shared = shared_secret()
+    return bool(shared) and hmac.compare_digest(presented, shared)
 
 
 def send(handler, status, payload, content_type="application/json"):

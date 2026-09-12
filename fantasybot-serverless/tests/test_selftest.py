@@ -153,10 +153,22 @@ class DatabaseClockProbe(StorageTestCase):
     HEALTHY_CLOCK = {"scheduled": True, "active": True, "runs_last_hour": 59,
                      "http_ok": 59, "http_failed": 0}
 
+    def setUp(self):
+        super().setUp()
+        from fantasybot import config
+        self._saved_secret = config.BOT_CRON_SECRET
+        config.BOT_CRON_SECRET = "el-de-vercel"
+        self.addCleanup(lambda: setattr(config, "BOT_CRON_SECRET",
+                                        self._saved_secret))
+
     def _probe(self, rows, clock="healthy"):
         """`rows` is the scheduler_config row; `clock` is what the database says
         about the cron JOB. They are independent, which is the whole point."""
         status = self.HEALTHY_CLOCK if clock == "healthy" else clock
+        # Unless a case is about the secret, every row carries the right one —
+        # otherwise each of these tests would fail on the secret check first and
+        # never reach the thing it was written to check.
+        rows = [{"bot_secret": "el-de-vercel", **r} for r in rows]
 
         def fake_request(method, path, params=None, body=None, prefer=None):
             if path.startswith("rpc/"):
@@ -201,13 +213,31 @@ class DatabaseClockProbe(StorageTestCase):
         self.assertEqual(status, selftest.WARN)
         self.assertIn("2 veces", detail)
 
-    def test_a_cron_whose_calls_all_fail_points_at_the_secret(self):
+    def test_a_mismatched_secret_is_named_outright(self):
+        """Otherwise the report says "the calls fail" and leaves you comparing
+        two opaque strings by hand, across two web consoles."""
+        status, detail = self._probe([{"app_url": "https://real.vercel.app",
+                                       "enabled": True,
+                                       "bot_secret": "el-viejo"}])
+        self.assertEqual(status, selftest.FAIL)
+        self.assertIn("no coincide", detail)
+
+    def test_an_empty_secret_is_named_outright(self):
+        status, detail = self._probe([{"app_url": "https://real.vercel.app",
+                                       "enabled": True, "bot_secret": ""}])
+        self.assertEqual(status, selftest.FAIL)
+        self.assertIn("401", detail)
+
+    def test_failing_calls_with_the_right_secret_point_elsewhere(self):
+        """Once the secret is known to match, repeating "it is probably the
+        secret" is the diagnosis lying — the remaining causes are the URL
+        pointing at another deployment, or Vercel refusing before our code."""
         status, detail = self._probe(
             [{"app_url": "https://real.vercel.app", "enabled": True}],
             clock={"scheduled": True, "active": True, "runs_last_hour": 60,
                    "http_ok": 0, "http_failed": 60})
         self.assertEqual(status, selftest.FAIL)
-        self.assertIn("bot_secret", detail)
+        self.assertIn("Deployment Protection", detail)
 
     def test_a_missing_status_function_asks_for_the_migration(self):
         status, detail = self._probe(
@@ -267,28 +297,49 @@ class SelfHealingClock(StorageTestCase):
         from fantasybot import config, tick
         self.tick, self.config = tick, config
         self._saved_url = config.VERCEL_APP_URL
+        self._saved_secret = config.BOT_CRON_SECRET
         config.VERCEL_APP_URL = "https://real.vercel.app"
+        config.BOT_CRON_SECRET = "el-de-vercel"
         self.addCleanup(lambda: setattr(config, "VERCEL_APP_URL",
                                         self._saved_url))
+        self.addCleanup(lambda: setattr(config, "BOT_CRON_SECRET",
+                                        self._saved_secret))
 
-    def _heal(self, stored, stored_secret=None):
-        calls = []
+    def _table(self, stored, stored_secret=None):
+        """A stand-in that behaves like the row, not like a mock.
+
+        The repair reads the row back after writing it, so a fake that answers
+        the second GET with the value from before the PATCH would report every
+        repair as failed — and, worse, a fake that ignores the PATCH entirely
+        would hide exactly the bug this read-back exists to catch.
+        """
         from fantasybot import config
         secret = (stored_secret if stored_secret is not None
                   else config.BOT_CRON_SECRET)
+        row = None if stored is None else {"app_url": stored,
+                                           "bot_secret": secret}
+        calls = []
 
         def fake_request(method, path, params=None, body=None, prefer=None):
-            calls.append((method, body))
+            calls.append((method, dict(params or {}), body))
             if method == "GET":
-                return ([] if stored is None
-                        else [{"app_url": stored, "bot_secret": secret}])
+                return [] if row is None else [dict(row)]
+            if method == "PATCH" and row is not None:
+                row.update({k: v for k, v in (body or {}).items()
+                            if k != "updated_at"})
             return None
 
+        return row, calls, fake_request
+
+    def _heal(self, stored, stored_secret=None, calls_out=None):
+        _, calls, fake_request = self._table(stored, stored_secret)
         with mock.patch.object(type(self.store), "kind", "supabase"), \
              mock.patch.object(self.store, "_request", fake_request,
                                create=True):
             self.tick._heal_scheduler_url(self.store)
-        return [b for m, b in calls if m == "PATCH"]
+        if calls_out is not None:
+            calls_out.extend(calls)
+        return [b for m, _p, b in calls if m == "PATCH"]
 
     def test_it_replaces_a_placeholder(self):
         written = self._heal("https://TU-APP.vercel.app")
@@ -297,27 +348,56 @@ class SelfHealingClock(StorageTestCase):
     def test_it_syncs_a_mismatched_secret(self):
         """Fifteen 401s in fifteen minutes is what a wrong secret looks like:
         the clock runs, every call is refused, nothing surfaces."""
-        from fantasybot import config
-        saved = config.BOT_CRON_SECRET
-        config.BOT_CRON_SECRET = "el-de-vercel"
-        try:
-            written = self._heal("https://real.vercel.app",
-                                 stored_secret="el-viejo")
-        finally:
-            config.BOT_CRON_SECRET = saved
+        written = self._heal("https://real.vercel.app",
+                             stored_secret="el-viejo")
         self.assertEqual(written[0]["bot_secret"], "el-de-vercel")
         self.assertNotIn("app_url", written[0],
                          "a URL somebody chose must be left alone")
 
     def test_a_matching_secret_is_not_rewritten(self):
-        from fantasybot import config
-        saved = config.BOT_CRON_SECRET
-        config.BOT_CRON_SECRET = "igual"
-        try:
-            self.assertEqual(self._heal("https://real.vercel.app",
-                                        stored_secret="igual"), [])
-        finally:
-            config.BOT_CRON_SECRET = saved
+        self.assertEqual(self._heal("https://real.vercel.app",
+                                    stored_secret="el-de-vercel"), [])
+
+    def test_it_reads_the_row_the_clock_reads(self):
+        """fantasybot_wake() selects id = 1. Inspecting "the first row" and
+        writing to id = 1 are the same row until the table holds two, and then
+        the repair reports success having changed nothing."""
+        calls = []
+        self._heal("https://TU-APP.vercel.app", calls_out=calls)
+        gets = [params for m, params, _b in calls if m == "GET"]
+        self.assertTrue(gets)
+        for params in gets:
+            self.assertEqual(params.get("id"), "eq.1")
+
+    def test_it_mints_a_secret_when_neither_side_has_one(self):
+        """Without this the clock is locked out for good: nothing to sync, and
+        every call refused by a deployment that cannot recognise it."""
+        self.config.BOT_CRON_SECRET = ""
+        written = self._heal("https://real.vercel.app", stored_secret="")
+        minted = written[0]["bot_secret"]
+        self.assertGreaterEqual(len(minted), 20)
+        # The guard accepts it from then on; test_api_auth covers that end.
+
+    def test_it_leaves_a_stored_secret_alone_when_vercel_has_none(self):
+        """The deployment then accepts the stored one instead of overwriting a
+        working key with a fresh one every time a page is loaded."""
+        self.config.BOT_CRON_SECRET = ""
+        self.assertEqual(self._heal("https://real.vercel.app",
+                                    stored_secret="el-que-ya-funciona"), [])
+
+    def test_a_write_that_does_not_land_is_not_announced(self):
+        """A PATCH matching no row succeeds — 200, empty, no complaint. Saying
+        "repaired" then sends you looking in the wrong place for a night."""
+        def fake_request(method, path, params=None, body=None, prefer=None):
+            if method == "GET":
+                return [{"app_url": "https://TU-APP.vercel.app",
+                         "bot_secret": "el-de-vercel"}]
+            return None          # the PATCH changes nothing
+
+        with mock.patch.object(type(self.store), "kind", "supabase"), \
+             mock.patch.object(self.store, "_request", fake_request,
+                               create=True):
+            self.assertIs(self.tick._heal_scheduler_url(self.store), False)
 
     def test_it_reports_whether_it_wrote(self):
         """The health endpoint surfaces this, so it has to be truthful: a repair
@@ -325,11 +405,7 @@ class SelfHealingClock(StorageTestCase):
         from fantasybot import tick as tick_mod
 
         def run(stored):
-            def fake_request(method, path, params=None, body=None, prefer=None):
-                from fantasybot import config
-                return ([] if stored is None
-                        else [{"app_url": stored,
-                               "bot_secret": config.BOT_CRON_SECRET}])
+            _row, _calls, fake_request = self._table(stored)
             with mock.patch.object(type(self.store), "kind", "supabase"), \
                  mock.patch.object(self.store, "_request", fake_request,
                                    create=True):
