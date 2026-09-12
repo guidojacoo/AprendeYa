@@ -99,14 +99,27 @@ begin
     null;   -- pg_cron not installed, or no permission to read its tables
   end;
 
+  -- pg_net calls this column `status_code`; older builds used `status`. Probing
+  -- both, dynamically, because a diagnosis that fails on a column name tells you
+  -- nothing about the thing you were actually trying to check.
   begin
-    select count(*) filter (where status between 200 and 299),
-           count(*) filter (where status is null or status >= 300)
-      into ok_responses, bad_responses
-      from net._http_response
-     where created > now() - interval '1 hour';
+    execute $q$
+      select count(*) filter (where status_code between 200 and 299),
+             count(*) filter (where status_code is null or status_code >= 300)
+        from net._http_response
+       where created > now() - interval '1 hour'
+    $q$ into ok_responses, bad_responses;
   exception when others then
-    null;
+    begin
+      execute $q$
+        select count(*) filter (where status between 200 and 299),
+               count(*) filter (where status is null or status >= 300)
+          from net._http_response
+         where created > now() - interval '1 hour'
+      $q$ into ok_responses, bad_responses;
+    exception when others then
+      null;   -- no response table we can read; the cron counts still stand
+    end;
   end;
 
   return jsonb_build_object(
