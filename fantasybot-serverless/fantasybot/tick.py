@@ -917,8 +917,6 @@ def run_review(ctx, force=False):
         remaining = dict(team)
         remaining["teamMoney"] = max(0, int(num(team.get("teamMoney")))
                                      - gaps_res.get("committed", 0))
-        bids_res = (_plan_bids(ctx, client, lid, remaining, report)
-                    if _afford("bids", 10) else {"mode": "out of time"})
         best = None
         try:
             from .strategy import lineup as lineup_opt
@@ -937,9 +935,15 @@ def run_review(ctx, force=False):
         except Exception as e:                   # noqa: BLE001
             market, days_listed = None, None
             skipped.append(f"reserves ({e})")
+        # Listing comes BEFORE the phases that spend. It is the one that brings
+        # money in, it is the cheapest of them, and it is the one that had never
+        # run: the review kept reaching its budget among the phases that buy and
+        # dropping the phase that sells. Selling first also funds the buying.
         listings = (_plan_listings(ctx, client, lid, team, best,
                                    report.get("sells"), market, days_listed)
                     if _afford("listings", 8) else {"mode": "out of time"})
+        bids_res = (_plan_bids(ctx, client, lid, remaining, report)
+                    if _afford("bids", 10) else {"mode": "out of time"})
         clauses = (_plan_clauses(ctx, lid, team, report)
                    if _afford("clauses", 6) else {"queued": []})
         shield = (_plan_shield(ctx, lid, report)
@@ -967,6 +971,11 @@ def run_review(ctx, force=False):
                         detail={"elapsed": round(ctx.elapsed(), 1)},
                         status="plan")
         return {"status": "ok", "money": report.get("money"),
+                # Which phases the clock cost us, and how long the whole thing
+                # took. Every time this mattered it was missing: a review that
+                # drops its phases looks identical to one that had nothing to do.
+                "skipped": skipped,
+                "seconds": round(ctx.elapsed(), 1),
                 # The census travels with the answer, not only into the stored
                 # report: the caller asking "why did it buy a keeper" is holding
                 # this dict, and sending them to look somewhere else is how the

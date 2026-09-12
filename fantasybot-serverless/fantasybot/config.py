@@ -179,7 +179,13 @@ def self_url():
 
 # A Vercel Hobby function is killed at 60s. We stop well before that so the tick
 # always gets to write its state and close its execution row.
-TICK_BUDGET_SECONDS = _int("TICK_BUDGET_SECONDS", 40)
+# A CEILING, not a duration: a tick with nothing due still finishes in two
+# seconds. Raising it costs idle ticks nothing and buys the review room it was
+# running out of — it kept reaching the limit among the phases that spend and
+# dropping the phase that sells, which had therefore never once run. Vercel kills
+# the function at 60s with no cleanup, so ten seconds stay in hand, and every
+# phase guard is relative to what is left rather than to this number.
+TICK_BUDGET_SECONDS = _int("TICK_BUDGET_SECONDS", 50)
 # How long the REVIEW may spend fetching from slow external sources. Far smaller
 # than the tick's budget on purpose: scraping futbolfantasy cold takes ~25s, and
 # a review that spends it there has nothing left to decide with. Warming those
