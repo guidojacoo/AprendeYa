@@ -102,9 +102,14 @@ def _execute_bid(ctx, action):
     market_id = p.get("market_id")
     budget = max(2.0, ctx.remaining() - 4.0)
     dry = ctx.dry_run or not bids_allowed()
+    # The lead is 60s and a tick can hold about 32 of them, so the watch used to
+    # be handed back at ~25s to close and the next tick arrived after it. Telling
+    # the bidder how long that gap is lets it bid instead of passing an auction
+    # nobody else will attend.
     res = bidding.snipe(league_id, market_id, int(p.get("max_bid") or 0),
                         dry_run=dry, log=ctx.log,
-                        client=ctx.get_client(), budget_seconds=budget)
+                        client=ctx.get_client(), budget_seconds=budget,
+                        last_call_seconds=config.CLOCK_INTERVAL_SECONDS + 10)
     if res.get("status") == "waiting":
         # Still early. Stay queued; the scheduler will wake us closer to the close.
         return {"retry": True, **res}

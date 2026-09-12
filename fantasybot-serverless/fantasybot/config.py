@@ -200,6 +200,12 @@ LLM_INTERVAL = _int("FANTASYBOT_LLM_INTERVAL", 86400)             # 1 day
 # must hold the line for.
 BID_LEAD_SECONDS = _int("FANTASYBOT_BID_LEAD_SECONDS", 60)
 
+# How often something actually wakes the bot. pg_cron runs it every minute, which
+# is the finest granularity it offers. The bidder needs this number: it is what
+# decides whether handing a watch back means "a later tick will finish this" or
+# "nobody will". Raise it if you ever drop the clock to a slower schedule.
+CLOCK_INTERVAL_SECONDS = _int("FANTASYBOT_CLOCK_INTERVAL", 60)
+
 # --- autonomy ----------------------------------------------------------------
 # Mirrors the CLI's documented autonomy: lineup + bids yes, buyouts no.
 AUTO_EXECUTE = _flag("FANTASYBOT_AUTO_EXECUTE", True)

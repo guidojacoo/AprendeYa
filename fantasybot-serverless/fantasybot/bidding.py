@@ -107,7 +107,7 @@ def _our_bid(row):
 
 def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
           poll=DEFAULT_POLL, dry_run=False, log=print, client=None,
-          budget_seconds=None):
+          budget_seconds=None, last_call_seconds=0):
     """Watch a listing and bid at the optimal moment, within a time budget.
 
     Returns a dict whose "status" is one of:
@@ -118,6 +118,13 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
       unpriced  no usable value, so no bid could be sized
       waiting   still too early AND the budget ran out; call again later
     `budget_seconds=None` means "no budget": poll until the close (CLI behaviour).
+
+    `last_call_seconds` is how long the caller expects to wait before it can run
+    again. When the budget runs out and the close is nearer than that, handing
+    the watch back means nobody is left to bid — so it bids NOW, at the same
+    price the final window would have produced. That costs the sniping edge
+    (rivals see the bid count rise sooner) and it is not close: a bid placed
+    forty seconds early beats a bid never placed. Two signings were lost to this.
     """
     fc = client or FantasyClient()
     started = time.monotonic()
@@ -191,6 +198,32 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
         else:
             wait = min(poll, max(1, left - final))
         if budget_seconds is not None and _spent() + wait >= budget_seconds:
+            if left <= last_call_seconds:
+                # No later call arrives before the close, so the watch cannot be
+                # handed back. Bid at the price the final window would have set.
+                amount = decide(value, other_bids, 0, max_bid, final)
+                if amount is None:
+                    return {"status": "closed", "market_id": market_id,
+                            "nombre": nombre}
+                if dry_run:
+                    log(f"[bid] {nombre}: WOULD BID {amount:,} as last call "
+                        f"({int(left)}s left)")
+                    return {"status": "bid", "dry_run": True, "amount": amount,
+                            "market_id": market_id, "nombre": nombre,
+                            "other_bids": other_bids, "last_call": True}
+                resp = fc.make_bid(league_id, market_id, amount)
+                log(f"[bid] {nombre}: BID {amount:,} placed as LAST CALL "
+                    f"({int(left)}s left, no later tick before the close)")
+                events.emit("bid", f"Last-call bid: {amount:,} for {nombre}",
+                            detail={"rival_bids": other_bids,
+                                    "time_left": f"{int(left)}s",
+                                    "why": "no quedaba otra ejecución antes "
+                                           "del cierre"})
+                return {"status": "bid", "amount": amount, "last_call": True,
+                        "market_id": market_id, "nombre": nombre,
+                        "other_bids": other_bids,
+                        "bid_id": resp.get("id") if isinstance(resp, dict) else None,
+                        "response": resp}
             # Out of time before anything is due. Nothing was sent, so handing the
             # watch back to the next tick is always safe.
             return {"status": "waiting", "market_id": market_id, "nombre": nombre,

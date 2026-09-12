@@ -32,6 +32,55 @@ class SnipeOutcomes(StorageTestCase):
         self.assertEqual(client.bids[0]["amount"],
                          10_000_000 + bidding.UNCONTESTED_CUSHION)
 
+    def test_it_bids_rather_than_hand_back_a_watch_nobody_will_take(self):
+        """The bug that cost two signings.
+
+        The lead is 60s, a tick can hold about 32 of them, and the final window
+        starts at 15s. So the watch was handed back at ~25s to close and the next
+        tick — a minute later, on a one-minute clock — found the listing gone.
+        The auction was attended by nobody and the bid was never sent.
+        """
+        close = utcnow() + timedelta(seconds=40)
+        client = FakeClient([listing("m1", close.isoformat(), value=10_000_000)])
+        res = bidding.snipe("L", "m1", 11_000_000, client=client,
+                            budget_seconds=0.5, last_call_seconds=70,
+                            log=lambda m: None)
+        self.assertEqual(res["status"], "bid")
+        self.assertTrue(res["last_call"])
+        self.assertEqual(client.bids[0]["amount"],
+                         10_000_000 + bidding.UNCONTESTED_CUSHION,
+                         "the last call pays what the close would have paid")
+
+    def test_the_last_call_does_not_fire_while_another_tick_is_still_coming(self):
+        """Bidding early costs the sealed-timing edge, so it is only ever done
+        when the alternative is not bidding at all."""
+        close = utcnow() + timedelta(minutes=30)
+        client = FakeClient([listing("m1", close.isoformat(), value=10_000_000)])
+        res = bidding.snipe("L", "m1", 11_000_000, client=client,
+                            budget_seconds=0.5, last_call_seconds=70,
+                            log=lambda m: None)
+        self.assertEqual(res["status"], "waiting")
+        self.assertEqual(client.bids, [])
+
+    def test_the_last_call_respects_the_cap(self):
+        close = utcnow() + timedelta(seconds=40)
+        client = FakeClient([listing("m1", close.isoformat(),
+                                     value=10_000_000, bids=3)])
+        bidding.snipe("L", "m1", 10_020_000, client=client,
+                      budget_seconds=0.5, last_call_seconds=70,
+                      log=lambda m: None)
+        self.assertEqual(client.bids[0]["amount"], 10_020_000)
+
+    def test_without_a_last_call_window_the_old_behaviour_stands(self):
+        """The CLI passes no budget and holds to the close itself; nothing there
+        should start bidding early."""
+        close = utcnow() + timedelta(seconds=40)
+        client = FakeClient([listing("m1", close.isoformat(), value=10_000_000)])
+        res = bidding.snipe("L", "m1", 11_000_000, client=client,
+                            budget_seconds=0.5, log=lambda m: None)
+        self.assertEqual(res["status"], "waiting")
+        self.assertEqual(client.bids, [])
+
     def test_competition_makes_it_bid_early(self):
         close = utcnow() + timedelta(minutes=10)
         client = FakeClient([listing("m1", close.isoformat(),
