@@ -118,6 +118,16 @@ jobs:
           if [ "$EVENT" = "push" ]; then FORCE=1; fi
 
           BODY="$(call tick)"
+          # The database wakes the bot every minute, so a deploy check can arrive
+          # while one of those ticks already holds the review lock — and then it
+          # checks nothing. Wait out the lock and ask once more.
+          if [ "$EVENT" = "push" ] \
+             && [ "$(echo "$BODY" | jq -r '.review.status // ""')" = "skipped" ] \
+             && [ "$(echo "$BODY" | jq -r '.review.reason // ""')" != "not due" ]; then
+            echo "Review was locked by another tick ($(echo "$BODY" | jq -r '.review.reason')). Retrying once."
+            sleep 45
+            BODY="$(call tick)"
+          fi
           echo "$BODY" | jq -C '{ok, mode, duration_seconds, pending, next_deadline,
                                   sleep_seconds, actions, review: (.review.status // null),
                                   review_seconds: .review.seconds?,
