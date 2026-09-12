@@ -43,6 +43,11 @@ PROVIDERS = {
 }
 
 
+# Sent on every LLM request. See _post: providers behind Cloudflare reject
+# urllib's default announcement.
+USER_AGENT = "fantasybot/1.0 (+https://github.com/jonortega20/fantasybot)"
+
+
 class LLMError(Exception):
     pass
 
@@ -62,14 +67,38 @@ def describe():
 
 
 def _post(url, payload, headers, timeout):
+    # A real User-Agent is not cosmetic here. urllib announces itself as
+    # "Python-urllib/3.x", and providers behind Cloudflare fingerprint that and
+    # refuse the request outright — Groq answers 403 "error code: 1010", which
+    # reads like a bad API key and is nothing of the sort. Identifying the client
+    # honestly (and like an HTTP client rather than a bare script) gets through.
     req = urllib.request.Request(
         url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json", **headers}, method="POST")
+        headers={"Content-Type": "application/json",
+                 "Accept": "application/json",
+                 "User-Agent": USER_AGENT,
+                 **headers},
+        method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:400]
+        if e.code == 403 and "1010" in detail:
+            raise LLMError(
+                f"{e.code}: bloqueado por Cloudflare (error 1010) — el proveedor "
+                f"rechazó al cliente, no a la clave. Suele arreglarse con un "
+                f"User-Agent propio; si persiste, probá otro LLM_PROVIDER."
+            ) from None
+        if e.code in (401, 403):
+            raise LLMError(f"{e.code}: clave rechazada por el proveedor. "
+                           f"Revisá LLM_API_KEY. {detail}") from None
+        if e.code == 404:
+            raise LLMError(f"404: el modelo no existe en este proveedor. "
+                           f"Probá otro LLM_MODEL. {detail}") from None
+        if e.code == 429:
+            raise LLMError(f"429: límite de peticiones del proveedor. "
+                           f"{detail}") from None
         raise LLMError(f"{e.code}: {detail}") from None
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         # Deliberately NOT retried. A strategic pass is advisory; a slow provider

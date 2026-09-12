@@ -6,7 +6,9 @@ past these clamps, a hallucination (or a prompt injection riding in on a player
 name) becomes a real bid.
 """
 
+import unittest
 from datetime import timedelta
+from unittest import mock
 
 from fantasybot import scheduler
 from fantasybot.llm import strategy
@@ -111,3 +113,82 @@ class DisabledByDefault(StorageTestCase):
             self.assertFalse(strategy.enabled())
         finally:
             config.LLM_PROVIDER = saved
+
+
+class RequestHeaders(unittest.TestCase):
+    """How the client announces itself.
+
+    urllib says "Python-urllib/3.x" by default, and providers behind Cloudflare
+    fingerprint that and refuse outright — Groq answers 403 "error code: 1010",
+    which reads exactly like a bad API key and is nothing of the sort.
+    """
+
+    def _headers_for(self, provider, extra=None):
+        from fantasybot import config
+        from fantasybot.llm import client as llm_client
+
+        saved = (config.LLM_PROVIDER, config.LLM_API_KEY, config.LLM_MODEL)
+        config.LLM_PROVIDER, config.LLM_API_KEY = provider, "k"
+        config.LLM_MODEL = "m"
+        seen = {}
+
+        class FakeResp:
+            def read(self):
+                return b'{"choices":[{"message":{"content":"ok"}}],' \
+                       b'"content":[{"type":"text","text":"ok"}],' \
+                       b'"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def fake_urlopen(req, timeout=None):
+            seen.update(req.headers)
+            return FakeResp()
+
+        try:
+            with mock.patch.object(llm_client.urllib.request, "urlopen",
+                                   fake_urlopen):
+                llm_client.complete("s", "u")
+        finally:
+            config.LLM_PROVIDER, config.LLM_API_KEY, config.LLM_MODEL = saved
+        # urllib title-cases header names on the Request object.
+        return {k.lower(): v for k, v in seen.items()}
+
+    def test_it_does_not_announce_itself_as_urllib(self):
+        for provider in ("groq", "openai", "anthropic", "gemini"):
+            ua = self._headers_for(provider).get("user-agent", "")
+            self.assertIn("fantasybot", ua, f"{provider} sent {ua!r}")
+            self.assertNotIn("urllib", ua.lower())
+
+    def test_the_api_key_still_goes_where_each_provider_expects_it(self):
+        self.assertIn("authorization", self._headers_for("groq"))
+        self.assertIn("x-api-key", self._headers_for("anthropic"))
+
+
+class ErrorsExplainThemselves(unittest.TestCase):
+    """A provider's HTTP status is not a diagnosis. These translate."""
+
+    def _raise(self, code, body):
+        import urllib.error
+        from fantasybot.llm import client as llm_client
+
+        err = urllib.error.HTTPError("u", code, "e", {}, None)
+        err.read = lambda: body.encode()
+        with mock.patch.object(llm_client.urllib.request, "urlopen",
+                               side_effect=err):
+            with self.assertRaises(llm_client.LLMError) as ctx:
+                llm_client._post("https://x", {}, {}, 5)
+        return str(ctx.exception)
+
+    def test_cloudflare_1010_is_not_reported_as_a_bad_key(self):
+        msg = self._raise(403, '{"error":"error code: 1010"}')
+        self.assertIn("Cloudflare", msg)
+        self.assertIn("no a la clave", msg)
+
+    def test_a_real_401_points_at_the_key(self):
+        self.assertIn("LLM_API_KEY", self._raise(401, "unauthorized"))
+
+    def test_a_404_points_at_the_model(self):
+        self.assertIn("LLM_MODEL", self._raise(404, "model not found"))
+
+    def test_a_429_says_it_is_a_rate_limit(self):
+        self.assertIn("límite", self._raise(429, "slow down"))
