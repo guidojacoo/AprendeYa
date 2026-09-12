@@ -97,6 +97,12 @@ def sell_candidates(team, best, trends_index, falling_threshold=FALLING_THRESHOL
         out.append({
             "nombre": pm.get("nickname") or pm.get("name"),
             "player_id": pm.get("id"),
+            # LaLiga's sell endpoint keys on the ROSTER-SLOT id, not the
+            # playerMaster id (its request field is named `playerId` while its
+            # value is the playerTeamId — a field-name-vs-value mismatch). Any
+            # automated sale needs this one, so it is carried explicitly rather
+            # than re-derived by every caller.
+            "player_team_id": ptid,
             "pos": POS.get(pm.get("positionId"), "?"),
             "valor": valor,
             "sale_price": round(valor),  # fair price for a quick sale
