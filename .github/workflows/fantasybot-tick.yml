@@ -93,8 +93,20 @@ jobs:
           # post-deploy check a check of the previous deploy. Wait for the build
           # before asking it anything.
           if [ "$EVENT" = "push" ]; then
-            echo "Waiting for the Vercel build before the post-deploy tick..."
-            sleep 150
+            # Wait for THIS commit to be the one answering, not merely for time
+            # to pass. A fixed sleep validates whichever build happens to be live
+            # when it ends, and with deploys queued behind each other that is
+            # regularly the previous one — three conclusions were drawn tonight
+            # from output that came from a build other than the one pushed.
+            echo "Waiting for ${GITHUB_SHA:0:7} to go live..."
+            for _ in $(seq 1 20); do
+              sleep 15
+              LIVE="$(curl -sS --max-time 20 "${APP_URL}/api" | jq -r '.deploy // ""')"
+              [ -n "$LIVE" ] && echo "  live: $LIVE"
+              case "${GITHUB_SHA}" in
+                "$LIVE"*) echo "  this is the build we pushed."; break ;;
+              esac
+            done
           fi
 
           call() {

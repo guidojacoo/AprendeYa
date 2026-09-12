@@ -45,6 +45,11 @@ class handler(BaseHTTPRequestHandler):
             "service": "fantasybot",
             "storage": kind,
             "configured": bool(config.BOT_CRON_SECRET),
+            # Which commit is answering. Public on purpose and harmless — it is
+            # the same sha as the repository's HEAD — and it is what lets a deploy
+            # check wait for the build it pushed instead of for a fixed number of
+            # seconds and whatever happens to be live when they elapse.
+            "deploy": config.DEPLOY_SHA[:7] or None,
             "clock_repaired": healed,
             "now": to_iso(utcnow()),
         })

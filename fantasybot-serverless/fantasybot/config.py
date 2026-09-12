@@ -150,6 +150,12 @@ STORAGE_BACKEND = _env(
 STORAGE_SCOPE = _env("FANTASYBOT_SCOPE", "default")
 
 # --- serverless tick ---------------------------------------------------------
+# Which commit this deployment was built from. Vercel injects it; empty
+# everywhere else. A check that cannot name the build it is talking to will
+# happily validate the previous one — three conclusions were drawn tonight from
+# output that came from a deployment other than the one just pushed.
+DEPLOY_SHA = (_env("VERCEL_GIT_COMMIT_SHA") or "")[:40]
+
 BOT_CRON_SECRET = _env("BOT_CRON_SECRET")
 # Vercel's own Cron sends `Authorization: Bearer $CRON_SECRET`, so accepting it
 # too lets Vercel Cron act as a free daily backstop without a second endpoint.

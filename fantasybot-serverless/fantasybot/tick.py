@@ -1121,7 +1121,10 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
     execution_id = None
     failed = []          # phases that raised: contained, reported, never hidden
     summary = {"mode": mode, "started_at": to_iso(utcnow()), "dry_run": dry_run,
-               "source": source or "unknown"}
+               "source": source or "unknown",
+               # So a caller can tell whether it is looking at the build it just
+               # deployed, instead of assuming.
+               "deploy": config.DEPLOY_SHA[:7] or None}
 
     try:
         _close_stale_executions(store)
