@@ -19,6 +19,8 @@ toward last season's rate until enough matches have been played, which is the
 difference between spotting form and chasing noise.
 """
 
+from ..matching import position_id
+
 # Appearances at which this season's average is trusted on its own. Below it the
 # estimate leans on last season in proportion to how little we have seen.
 SAMPLE_FULL = 8
@@ -95,7 +97,7 @@ def fixture_factor(pm, difficulty):
         d = float(difficulty)
     except (TypeError, ValueError):
         return 1.0
-    weight = FIXTURE_WEIGHT.get(int(pm.get("positionId") or 0),
+    weight = FIXTURE_WEIGHT.get(position_id(pm),
                                 DEFAULT_FIXTURE_WEIGHT)
     return max(0.1, 1.0 + weight * (1.0 - 2.0 * min(1.0, max(0.0, d))))
 

@@ -16,7 +16,7 @@ without a falling trend. It only kicks in under low cash on purpose: with health
 there's no rush to sell a fine, merely-benched squad player.
 """
 
-from ..matching import match_name, POS
+from ..matching import match_name, position_of
 from .lineup import payload_ids
 from . import points as points_mod
 
@@ -136,7 +136,7 @@ def sell_candidates(team, best, trends_index, falling_threshold=FALLING_THRESHOL
             # automated sale needs this one, so it is carried explicitly rather
             # than re-derived by every caller.
             "player_team_id": ptid,
-            "pos": POS.get(pm.get("positionId"), "?"),
+            "pos": position_of(pm, "?"),
             "valor": valor,
             "sale_price": round(valor),  # fair price for a quick sale
             "tendencia": tendencia,

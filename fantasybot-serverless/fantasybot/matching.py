@@ -13,6 +13,31 @@ import unicodedata
 POS = {1: "POR", 2: "DEF", 3: "MED", 4: "DEL", 5: "ENT"}
 
 
+def position_id(pm) -> int:
+    """`positionId` as an int, whatever LaLiga felt like sending.
+
+    The API returns numeric fields as strings on some endpoints and as numbers on
+    others — `all_players()` does it with marketValue, verified live. A dict keyed
+    by int then misses every lookup silently: `{1: "POR"}.get("1")` is None, so a
+    squad with three goalkeepers counts zero of them, every line reads as short,
+    and the optimiser announces "No goalkeeper in the squad" while three of them
+    sit in it. That is precisely what happened, and it cost a bid on a keeper
+    nobody needed.
+
+    Anything unreadable becomes 0, which matches no line — the same as today's
+    behaviour for a genuinely unknown position, and never a wrong position.
+    """
+    try:
+        return int((pm or {}).get("positionId") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def position_of(pm, default=None):
+    """The POR/DEF/MED/DEL/ENT label for a player payload."""
+    return POS.get(position_id(pm), default)
+
+
 def normalize(name: str) -> str:
     """lowercase + accent-stripped, to match names across sources."""
     n = unicodedata.normalize("NFKD", name or "")

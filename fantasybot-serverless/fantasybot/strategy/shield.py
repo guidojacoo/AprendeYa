@@ -12,7 +12,7 @@ determinism, `now`. No network here.
 
 from datetime import datetime, timedelta, timezone
 
-from ..matching import POS
+from ..matching import position_of
 
 # A player worth shielding at all: below this, losing him to a clause barely hurts, so we
 # don't bother (keeps the agent from "protecting" near-worthless bench filler).
@@ -103,7 +103,7 @@ def shield_candidate(team, rivals_max_money, now=None, min_value=MIN_VALUE,
             "nombre": pm.get("nickname") or pm.get("name"),
             "player_id": pm.get("id"),
             "player_team_id": p.get("playerTeamId") or pm.get("id"),
-            "pos": POS.get(pm.get("positionId"), "?"),
+            "pos": position_of(pm, "?"),
             "value": value,
             "clause": clause,
             "unlock": unlock,

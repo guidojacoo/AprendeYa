@@ -220,6 +220,7 @@
         <div class="note">Tocá un jugador para ver el razonamiento.</div>
         <div class="scroll" id="market"></div></section>
       <section><h2>Ofertas recibidas</h2><div id="offers"></div></section>
+      <section><h2>Qué no llegó a hacer</h2><div id="shortfall"></div></section>
       <section><h2>Oportunidades de compra</h2><div class="scroll" id="flips"></div></section>
       <section><h2>Cláusulas programadas</h2><div id="clauses"></div></section>
       <section><h2>Blindaje</h2><div id="shield"></div></section>
@@ -436,6 +437,21 @@ function render(d){
     +'</small></div><div class="right">'+esc(short(o.amount))+'</div></div>',
     off.status==='skipped'?('Sin evaluar: '+esc(off.reason||'')):'Nadie ofertó todavía.');
   $('c-mercado').textContent=rows.length?rows.length:'';
+
+  /* Lo que la revisión no llegó a hacer. Antes solo quedaba en un evento, que
+     se va hacia abajo; "no listó a nadie" necesita un motivo que siga ahí. */
+  const sk=rep.skipped_phases||[];
+  const PHASE={listings:'poner la plantilla en venta',clauses:'cláusulas',
+    gap_signings:'fichajes para huecos',bids:'pujas',shield:'blindaje',
+    matchday:'alineación de jornada',sources:'fuentes externas',
+    reserves:'precios de reserva'};
+  $('shortfall').innerHTML=sk.length
+    ?('<div class="row"><span class="tag warn">sin tiempo</span><div class="m">'
+      +'La última revisión no llegó a: '
+      +esc(sk.map(x=>PHASE[x]||x).join(', '))
+      +'<small>Pasa cuando la revisión se acerca al límite de 60s de Vercel. '
+      +'Se retoma en la siguiente.</small></div></div>')
+    :'<div class="empty">La última revisión hizo todo lo que tenía que hacer.</div>';
 
   /* ---- el mercado entero, puntuado ---- */
   const mk=rep.market||[];

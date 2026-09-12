@@ -14,7 +14,7 @@ notifications are built on top (see README / next steps).
 from datetime import date, datetime, timedelta
 
 from . import cache, config, state
-from .matching import match_name, POS
+from .matching import match_name, position_of
 from .strategy import captain as captain_mod
 from .strategy import flip, needs as needs_mod, sell as sell_mod
 from .strategy import lineup as lineup_opt
@@ -96,7 +96,7 @@ def clause_targets(market, team, prob_index):
         pm = el["playerMaster"]
         if pm["id"] in owned:
             continue
-        pos = POS.get(pm.get("positionId"))
+        pos = position_of(pm)
         if pos not in gap_positions:
             continue
         pt = el.get("playerTeam", {})

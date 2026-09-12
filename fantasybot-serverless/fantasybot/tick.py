@@ -783,15 +783,34 @@ def handle_offers(ctx):
             "skipped": skipped, "offers": len(decisions)}
 
 
-def _plan_listings(ctx, client, lid, team, best, sells):
-    """Queue a listing for every squad player not already on the market."""
+def _store_reserves(client, lid, team, best, sells):
+    """Work out what each player is worth to us, and write it down.
+
+    Pulled out of `_plan_listings` because the offer handler runs on EVERY tick
+    and reads exactly this — while listing is a time-boxed phase the review drops
+    when it is running late. A shortened review therefore left the bot unable to
+    judge a single offer until a full one came round, which is why a squad
+    standing on the market sold nothing: the asks were out there and nobody was
+    reading the replies.
+
+    It is cheap enough to be unconditional: one market read and pure arithmetic.
+    """
     from .strategy import offers as offers_mod
 
     store = get_storage()
     market = client.market(lid)
     days = _days_listed(store, team, market)
-    store.put_doc("reserves",
-                  offers_mod.reserve_map(team, best, sells, listed_since=days))
+    reserves = offers_mod.reserve_map(team, best, sells, listed_since=days)
+    store.put_doc("reserves", reserves)
+    return market, days
+
+
+def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None):
+    """Queue a listing for every squad player not already on the market."""
+    from .strategy import offers as offers_mod
+
+    if market is None:
+        market, days = _store_reserves(client, lid, team, best, sells)
     if not config.AUTO_LIST or ctx.dry_run:
         return {"mode": "off" if not config.AUTO_LIST else "dry-run",
                 "listed": [], "would_list": offers_mod.plan_listings(
@@ -875,8 +894,16 @@ def run_review(ctx, force=False):
             best = lineup_opt.optimize(team)
         except ValueError:
             pass          # incomplete squad: reserves fall back to squad premiums
+        # Always, before anything that can be dropped for time: these are what
+        # every tick uses to answer an offer.
+        try:
+            market, days_listed = _store_reserves(client, lid, team, best,
+                                                  report.get("sells"))
+        except Exception as e:                   # noqa: BLE001
+            market, days_listed = None, None
+            skipped.append(f"reserves ({e})")
         listings = (_plan_listings(ctx, client, lid, team, best,
-                                   report.get("sells"))
+                                   report.get("sells"), market, days_listed)
                     if _afford("listings", 8) else {"mode": "out of time"})
         clauses = (_plan_clauses(ctx, lid, team, report)
                    if _afford("clauses", 6) else {"queued": []})
@@ -893,7 +920,7 @@ def run_review(ctx, force=False):
         store.put_doc("last_review_at", to_iso(now))
         store.put_doc("last_report",
                       _summarize(report, lineup_res, bids_res, listings,
-                                 clauses, shield, sources, gaps_res))
+                                 clauses, shield, sources, gaps_res, skipped))
         events.emit("review", f"Revisión: caja {report['money']:,} €",
                     detail={"flips": len(report.get("flips") or []),
                             "tasks": len(report.get("tasks") or []),
@@ -941,7 +968,7 @@ def _note_market_read(report):
 
 
 def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
-               shield=None, sources=None, gaps_res=None):
+               shield=None, sources=None, gaps_res=None, skipped_phases=None):
     """What the dashboard reads. Deliberately small: a full review payload is
     hundreds of KB of squad data and there is no reason to store it every hour."""
     lu = report.get("lineup") or {}
@@ -969,6 +996,7 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "clauses": clauses or {},
         "shield": shield or {},
         "sources": sources or {},
+        "skipped_phases": skipped_phases or [],
         # Is any of this actually making money? The rivals analysis already
         # computes our own purchases, sales and net P&L — surfacing it is the
         # difference between trusting the bot and hoping.

@@ -8,7 +8,7 @@ Returns data; the CLI does the formatting.
 from datetime import date
 
 from .. import state
-from ..matching import match_name, POS
+from ..matching import match_name, position_of
 from ..sources.market_trends import trends_index
 
 OFICIAL_TREND_DAYS = 7  # window for the official (LaLiga-banked) trend cross-check
@@ -89,7 +89,7 @@ def evaluate(element, index, horizon, today_iso=None):
         # When this listing closes. The serverless scheduler needs it to time a
         # last-minute bid; nothing else reads it.
         "expires_at": element.get("expirationDate"),
-        "pos": POS.get(pm.get("positionId"), "?"),
+        "pos": position_of(pm, "?"),
         "via": via,
         "owner": owner,
         "valor_actual": trend["valor"],

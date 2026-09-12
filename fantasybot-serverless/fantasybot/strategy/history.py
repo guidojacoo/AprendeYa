@@ -9,7 +9,7 @@ Tracks:
 from typing import Any, Dict, List, Optional
 from collections import defaultdict
 from datetime import datetime
-from ..matching import POS
+from ..matching import position_of
 from .. import state
 
 # Activity type IDs:
@@ -38,7 +38,7 @@ def resolve_player_names(
                 if name:
                     cache[pid_str] = {
                         "name": name,
-                        "pos": POS.get(pm.get("positionId"), "?"),
+                        "pos": position_of(pm, "?"),
                         "market_value": pm.get("marketValue") or 0,
                     }
 
@@ -57,7 +57,7 @@ def resolve_player_names(
                 if name:
                     cache[pid] = {
                         "name": name,
-                        "pos": POS.get(r.get("positionId"), "?"),
+                        "pos": position_of(r, "?"),
                         "market_value": r.get("marketValue") or 0,
                     }
             except Exception:

@@ -7,7 +7,7 @@ Combines:
 """
 
 from typing import Any, Dict, List, Optional
-from ..matching import POS
+from ..matching import position_of
 from .. import state
 
 # Activity type IDs from LaLiga Fantasy API:
@@ -120,7 +120,7 @@ def analyze_squad_clauses(players: List[Dict[str, Any]]) -> Dict[str, Any]:
         pm = p.get("playerMaster") or {}
         clause = p.get("buyoutClause") or 0
         mv = pm.get("marketValue") or 0
-        pos = POS.get(pm.get("positionId"), "?")
+        pos = position_of(pm, "?")
         name = pm.get("nickname") or pm.get("name") or "Unknown"
 
         total_clause += clause
@@ -177,7 +177,7 @@ def analyze_player_acquisitions(
         pm = p.get("playerMaster") or {}
         pid = str(pm.get("id"))
         pname = pm.get("nickname") or pm.get("name") or "Unknown"
-        pos = POS.get(pm.get("positionId"), "?")
+        pos = position_of(pm, "?")
         mv = pm.get("marketValue") or 0
         clause = p.get("buyoutClause") or 0
         protection = max(0, clause - mv)

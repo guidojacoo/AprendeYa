@@ -31,3 +31,22 @@ os.environ.setdefault("FANTASYBOT_HOME", _HOME)
 # bring back exactly the cross-run pollution this exists to stop.
 atexit.register(shutil.rmtree, _HOME, ignore_errors=True)
 
+
+
+# And no test reaches the network. The suite had been scraping futbolfantasy for
+# real — `lineup.optimize()` fetches the probable lineups when none are passed —
+# and nobody noticed because a cached copy in the repository answered instead.
+# Isolating the cache removed the copy and exposed the calls: slow, flaky, and
+# dependent on somebody else's website being up.
+#
+# Blocking it here rather than mocking it per test is deliberate. A test that
+# quietly starts depending on the network is the failure being prevented, and it
+# can only be prevented somewhere no test can forget about.
+import urllib.request  # noqa: E402
+
+
+def _no_network(*a, **kw):
+    raise OSError("tests do not use the network; pass the data in explicitly")
+
+
+urllib.request.urlopen = _no_network

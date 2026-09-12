@@ -9,7 +9,7 @@ Analyzes:
 """
 
 from typing import Dict, Any, List, Optional
-from ..matching import match_name, normalize
+from ..matching import match_name, normalize, position_id
 from ..sources.lineups import probable_lineups
 
 POS_LABELS = {1: "Portero", 2: "Defensa", 3: "Centrocampista", 4: "Delantero"}
@@ -29,7 +29,7 @@ def analyze_player_profile(
     pid = str(pm.get("id") or "")
     name = pm.get("nickname") or pm.get("name") or "Jugador"
     full_name = pm.get("name") or name
-    pos_id = int(pm.get("positionId") or 0)
+    pos_id = position_id(pm)
     pos_str = POS_LABELS.get(pos_id, "Jugador")
     team_data = pm.get("team") or {}
     team_name = team_data.get("name") or "LaLiga"

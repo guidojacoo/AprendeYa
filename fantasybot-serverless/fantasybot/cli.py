@@ -17,6 +17,7 @@ from datetime import date, datetime, timezone
 
 from . import auth
 from .api import FantasyClient, FantasyError
+from .matching import position_of
 from .sources import lineups as ff_lineups
 from .sources.market_trends import market_trends
 from .sources import value_history
@@ -120,7 +121,7 @@ def cmd_flip(args):
     team = fc.team(lid, tid)
     counts = {}
     for p in team["players"]:
-        pos = flip.POS.get(p["playerMaster"]["positionId"], "?")
+        pos = position_of(p["playerMaster"], "?")
         counts[pos] = counts.get(pos, 0) + 1
     ops = flip.opportunities(fc, lid, args.horizon)
     if args.json:

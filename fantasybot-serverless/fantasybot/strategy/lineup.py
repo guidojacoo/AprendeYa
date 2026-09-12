@@ -6,7 +6,7 @@ probability of each player starting (futbolfantasy) and their availability
 body ready for `FantasyClient.update_lineup`. It does NOT apply anything by itself.
 """
 
-from ..matching import match_name
+from ..matching import match_name, position_id
 from ..sources.lineups import probable_lineups
 from .captain import form as _form, pick_captain
 from . import points as points_mod
@@ -188,7 +188,7 @@ def _select_coach(players):
     the market side can flag, never an error here.
     """
     coaches = [p for p in players
-               if (p.get("playerMaster") or {}).get("positionId") == COACH_POSITION_ID]
+               if position_id(p.get("playerMaster")) == COACH_POSITION_ID]
     if not coaches:
         return None
 
@@ -228,7 +228,7 @@ def optimize(team, prob_index=None, premium=False, fixture_difficulty=None):
     by_pos = {"goalkeeper": [], "defender": [], "midfield": [], "striker": []}
     watch = []  # signals to watch (expensive players outside the probable lineup)
     for p in team["players"]:
-        pos = POS.get(p["playerMaster"]["positionId"])
+        pos = POS.get(position_id(p["playerMaster"]))
         if pos not in by_pos:   # unknown position OR a coach ("ENT"): never an XI line
             continue
         score, prob, disp, tag = player_score(p, prob_index, fixture_difficulty)
@@ -240,7 +240,15 @@ def optimize(team, prob_index=None, premium=False, fixture_difficulty=None):
         by_pos[pos].sort(key=lambda e: -e["score"])
 
     if not by_pos["goalkeeper"]:
-        raise ValueError("No goalkeeper in the squad.")
+        # Say what was counted, not just the verdict. "No goalkeeper in the
+        # squad" while three of them sat in it was true of the parsed data and
+        # false of the world, and the message gave no way to tell which — the
+        # position ids had arrived as strings and every int-keyed lookup missed.
+        seen = sorted({repr((p.get("playerMaster") or {}).get("positionId"))
+                       for p in team["players"]})
+        raise ValueError(
+            f"No goalkeeper in the squad ({len(team['players'])} players, "
+            f"positionId values seen: {', '.join(seen) or 'none'}).")
     # only AVAILABLE players are candidates for a slot; injured/suspended never fielded
     avail = {pos: [e for e in by_pos[pos] if e["disponible"]] for pos in by_pos}
     gk = (avail["goalkeeper"] or by_pos["goalkeeper"])[0]

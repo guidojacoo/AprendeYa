@@ -8,7 +8,7 @@ to pay a little above the ideal price (if you wait, another one may not show up 
 time). With several days ahead, there's no rush.
 """
 
-from ..matching import match_name, POS
+from ..matching import match_name, POS, position_id, position_of
 from ..sources.lineups import probable_lineups
 from . import points as points_mod
 
@@ -19,7 +19,7 @@ MIN_SQUAD = {"POR": 2, "DEF": 5, "MED": 5, "DEL": 3}
 def squad_counts(team):
     counts = {"POR": 0, "DEF": 0, "MED": 0, "DEL": 0}
     for p in team["players"]:
-        pos = POS.get(p["playerMaster"]["positionId"])
+        pos = position_of(p["playerMaster"])
         if pos in counts:   # only the 4 outfield lines; a coach ("ENT", positionId 5) is skipped
             counts[pos] += 1
     return counts
@@ -60,7 +60,7 @@ def candidates(client, league_id, position, prob_index=None, money=None, owned=N
     out = []
     for el in client.market(league_id):
         pm = el["playerMaster"]
-        if pm.get("positionId") != pos_id:
+        if position_id(pm) != pos_id:
             continue
         if pm.get("id") in owned:
             continue  # already yours
