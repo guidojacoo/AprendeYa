@@ -140,7 +140,14 @@ jobs:
             sleep 45
             BODY="$(call tick)"
           fi
-          echo "$BODY" | jq -C '{ok, mode, duration_seconds, pending, next_deadline,
+          # The two functions, side by side. If /api and /api/tick report
+          # different commits then Vercel is serving a per-function build cache
+          # and a change to the shared package never reached the function whose
+          # entrypoint did not change — which would explain an evening of fixes
+          # that appeared not to take.
+          echo "api=$(curl -sS --max-time 20 "${APP_URL}/api" | jq -r '.deploy // "?"')" \
+               "tick=$(echo "$BODY" | jq -r '.deploy // "?"')"
+          echo "$BODY" | jq -C '{ok, mode, deploy, duration_seconds, pending, next_deadline,
                                   sleep_seconds, actions, review: (.review.status // null),
                                   review_seconds: .review.seconds?,
                                   review_skipped: .review.skipped?,
