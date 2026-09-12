@@ -194,6 +194,7 @@
 
     <!-- MERCADO -->
     <div data-panel="mercado" class="hide">
+      <section><h2>Por qué hace lo que hace</h2><div id="why"></div></section>
       <section><h2>Ofertas recibidas</h2><div id="offers"></div></section>
       <section><h2>Oportunidades de compra</h2><div class="scroll" id="flips"></div></section>
       <section><h2>Cláusulas programadas</h2><div id="clauses"></div></section>
@@ -314,8 +315,8 @@ function render(d){
   const f=rep.formation, lr=rep.lineup_result||{};
   $('lineup').innerHTML=f
     ?('<div class="row"><div class="m"><b>'+f.join('-')+'</b>'
-      +'<small>'+esc(rep.lineup_changed?'cambiada en la última revisión':'ya era la óptima')
-      +(lr.incomplete?' · ⚠ incompleta':'')+'</small></div></div>')
+      +'<small>'+esc(lr.why||(rep.lineup_changed?'cambiada':'ya era la óptima'))
+      +'</small></div></div>')
     :'<div class="empty">Todavía sin datos de alineación.</div>';
 
   /* estrategia */
@@ -336,8 +337,8 @@ function render(d){
                      ...cls.map(c=>[c,'warn','descartada'])],
     ([c,cls2,label])=>'<div class="row"><span class="tag '+cls2+'">'+label+'</span>'
     +'<div class="m"><b>'+esc(c.nombre)+'</b> '+esc(c.pos||'')
-    +'<small>'+esc(c.why||('se abre '+when(c.unlock,true)))
-    +(c.prob?' · '+esc(c.prob)+'% titular':'')+'</small></div>'
+    +'<small>'+esc(c.why||c.why2||('se abre '+when(c.unlock,true)))
+    +'</small></div>'
     +'<div class="right">'+esc(short(c.clause))+'</div></div>',
     cl.mode==='off'?'Cláusulas automáticas apagadas.':'Ningún objetivo ahora mismo.');
 
@@ -354,6 +355,23 @@ function render(d){
     '<div class="row"><div class="k">#'+esc(t.id)+'</div><div class="m">'+esc(t.text)
     +(t.due?'<small>antes de '+esc(when(t.due,true))+'</small>':'')+'</div></div>',
     'Nada pendiente de tu parte.');
+
+  /* ---- por qué ---- */
+  const why=[];
+  const push=(kind,cls,item)=>{if(item&&item.why)why.push([kind,cls,item]);};
+  (((rep.gap_signings||{}).queued)||[]).forEach(x=>push('FICHA','warn',x));
+  (((rep.clauses||{}).queued)||[]).forEach(x=>push('CLÁUSULA','warn',x));
+  (((rep.bids||{}).scheduled)||[]).forEach(x=>push('PUJA','idle',x));
+  [...((d.offers||{}).accepted||[]),...((d.offers||{}).declined||[])]
+    .forEach(x=>push(x.action==='accept'?'VENDE':'RECHAZA',
+                     x.action==='accept'?'ok':'bad',x));
+  push('BLINDA','ok',(rep.shield||{}).queued);
+  push('ONCE','idle',rep.lineup_result);
+  (((rep.listings||{}).listed)||[]).slice(0,6).forEach(x=>push('VENTA','idle',x));
+  list($('why'),why,([kind,cls,item])=>
+    '<div class="row"><span class="tag '+cls+'">'+esc(kind)+'</span>'
+    +'<div class="m">'+esc(item.why)+'</div></div>',
+    'Todavía no tomó ninguna decisión — esperá a la primera revisión.');
 
   /* ---- mercado ---- */
   const off=d.offers||{};

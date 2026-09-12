@@ -24,7 +24,7 @@ import traceback
 from datetime import date, timedelta
 
 from . import agent as agent_mod
-from . import bidding, config, events, notify, scheduler
+from . import bidding, config, events, explain, notify, scheduler
 from . import execute as execute_mod
 from . import state
 from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
@@ -288,7 +288,7 @@ def _apply_best_lineup(ctx, client, lid, tid, team):
     res = execute_mod.apply_lineup(client, tid, best, current,
                                    dry_run=ctx.dry_run or not config.AUTO_LINEUP,
                                    current_coach=coach, current_captain=captain)
-    return {"status": "ok", **res}
+    return {"status": "ok", "why": explain.lineup(res, best), **res}
 
 
 def _plan_bids(ctx, client, lid, team, report):
@@ -340,12 +340,14 @@ def _plan_bids(ctx, client, lid, team, report):
             skipped.append({"market_id": mid, "reason": str(e)})
             continue
         state.complete_by_key(f"sell:{(by_id.get(mid) or {}).get('player_id')}")
+        why = explain.bid(by_id.get(mid) or {"nombre": b.get("nombre")},
+                          capped, reach if capped < b["amount"] else None)
         scheduled.append({"market_id": mid, "nombre": b.get("nombre"),
                           "max_bid": capped, "computed_cap": b["amount"],
                           "rival_reach": reach, "close_at": to_iso(close_at),
-                          "status": row.get("status")})
+                          "why": why, "status": row.get("status")})
         events.emit("bid-plan", f"Last-minute bid scheduled: {b.get('nombre') or mid}",
-                    detail={"max": f"{capped:,}", "closes": to_iso(close_at),
+                    detail={"why": why, "closes": to_iso(close_at),
                             "capped_from": (f"{b['amount']:,}"
                                             if capped < b["amount"] else None)},
                     status="plan")
@@ -410,13 +412,14 @@ def _plan_gap_signings(ctx, lid, team, report):
         # did it, so the task is done — leaving it up would make an autonomous
         # bot look like it was asking for help.
         state.complete_by_key(f"gap:{pos}")
+        why = explain.gap_signing(pos, c, cap)
         queued.append({"pos": pos, "nombre": c.get("nombre"),
                        "max_bid": cap, "prob": c.get("prob"),
-                       "closes": c.get("expires")})
+                       "closes": c.get("expires"), "why": why})
         events.emit("bid-plan", f"Gap signing queued: {c.get('nombre')} "
                                 f"for the empty {pos} slot",
-                    detail={"max": f"{cap:,}", "prob": c.get("prob"),
-                            "closes": c.get("expires")}, status="plan")
+                    detail={"why": why, "closes": c.get("expires")},
+                    status="plan")
         notify.send(f"gap:{pos}:{date.today().isoformat()}",
                     f"Falta un {pos}: pujando por {c.get('nombre')} "
                     f"hasta {cap:,} €", level="info")
@@ -474,11 +477,12 @@ def _plan_clauses(ctx, lid, team, report):
             idempotency_key=f"clause:{lid}:{t.get('player_id')}:{to_iso(unlock)}",
             expires_at=unlock + timedelta(hours=6))
         state.complete_by_key(f"clause:{t.get('player_id')}")
-        queued.append({**_target_brief(t), "unlock": to_iso(unlock)})
+        why = explain.clause(t, clause)
+        queued.append({**_target_brief(t), "unlock": to_iso(unlock), "why": why})
         events.emit("bid-plan", f"Clause queued: {t.get('nombre')} "
                                 f"for {clause:,}",
-                    detail={"unlocks": to_iso(unlock), "pos": t.get("pos"),
-                            "prob": t.get("prob")}, status="plan")
+                    detail={"why": why, "unlocks": to_iso(unlock)},
+                    status="plan")
     return {"mode": "on" if config.AUTO_CLAUSES else "off",
             "queued": queued, "skipped": skipped}
 
@@ -504,7 +508,7 @@ def _plan_shield(ctx, lid, report):
         idempotency_key=f"shield:{lid}:{cand.get('player_team_id')}:"
                         f"{date.today().isoformat()}",
         expires_at=utcnow() + timedelta(hours=12))
-    return {"mode": "on", "queued": cand}
+    return {"mode": "on", "queued": {**cand, "why": explain.shield(cand)}}
 
 
 def _days_listed(store, team, market):
@@ -662,6 +666,7 @@ def handle_offers(ctx):
 
     accepted, declined, skipped = [], [], []
     for d in decisions:
+        d["why"] = explain.offer(d)
         if ctx.out_of_time():
             skipped.append(d)
             continue
@@ -672,11 +677,8 @@ def handle_offers(ctx):
                     continue
                 client.accept_offer(lid, d["market_id"], d["offer_id"], d["amount"])
                 events.emit("sell", f"SOLD {d['nombre']} for {d['amount']:,}",
-                            detail={"reserve": d["reserve"], "value": d["value"],
-                                    "in_xi": d["in_xi"]})
-                notify.send(f"sold:{d['player_id']}",
-                            f"Vendido {d['nombre']} por {d['amount']:,} € "
-                            f"(reserva {d['reserve']:,} €)", level="good")
+                            detail={"why": d["why"]})
+                notify.send(f"sold:{d['player_id']}", d["why"], level="good")
                 accepted.append(d)
             elif config.DECLINE_LOWBALLS and not ctx.dry_run:
                 client.decline_offer(lid, d["market_id"], d["offer_id"])
@@ -719,7 +721,7 @@ def _plan_listings(ctx, client, lid, team, best, sells):
             idempotency_key=f"list:{lid}:{row['player_team_id']}:"
                             f"{date.today().isoformat()}",
             expires_at=utcnow() + timedelta(hours=12))
-        queued.append(row)
+        queued.append({**row, "why": explain.listing(row)})
     return {"mode": "on", "listed": queued}
 
 
