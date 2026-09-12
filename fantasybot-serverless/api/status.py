@@ -45,7 +45,11 @@ def _status(handler):
         "next_deadline": to_iso(scheduler.next_deadline()),
         "pending_actions": pending,
         "report": report,
+        # The most recent tick's offer handling lives on the execution row, not
+        # in the hourly report — offers are decided every tick.
+        "offers": ((last or {}).get("summary") or {}).get("offers"),
         "decisions": store.recent_decisions(limit=5),
+        "stance": store.get_doc("stance", None),
         "events": list(reversed(store.load_events(limit=limit))),
     }
 

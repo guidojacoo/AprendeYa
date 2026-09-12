@@ -37,6 +37,9 @@ REVIEW = "review"           # full deterministic agent review (+ optional execut
 LINEUP = "lineup"           # apply the optimal XI
 REMINDER = "reminder"       # fire a due reminder into the event log
 LLM_STRATEGY = "llm_strategy"  # the strategic pass (costs tokens)
+LIST_SQUAD = "list_squad"   # put one player on the market at his reserve price
+CLAUSE = "clause"           # pay a rival's buyout clause the second it unlocks
+SHIELD = "shield"           # protect one of ours from being claused
 
 _EXECUTORS: dict[str, Callable] = {}
 _EXECUTORS_LOADED = False
