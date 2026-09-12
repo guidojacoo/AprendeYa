@@ -21,13 +21,14 @@ and the runner does the waiting for free.
 
 import time
 import traceback
-from datetime import timedelta
+from datetime import date, timedelta
 
 from . import agent as agent_mod
 from . import bidding, config, events, scheduler
 from . import execute as execute_mod
 from . import state
-from .scheduler import BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW, TickContext
+from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
+                        TickContext)
 from .storage import (DONE, FAILED, get_storage, parse_iso, to_iso,
                       utcnow)
 
@@ -98,6 +99,28 @@ def _execute_bid(ctx, action):
                                 "nombre": res.get("nombre") or p.get("nombre")}
         state.save_bids(bids)
     return res
+
+
+@scheduler.executor(scheduler.LIST_SQUAD)
+def _execute_listing(ctx, action):
+    """Put one player on the market at his reserve price."""
+    p = action.get("payload") or {}
+    if ctx.dry_run or not config.AUTO_LIST:
+        return {"status": "skipped", "reason": "listing is off"}
+    client = ctx.get_client()
+    # Re-read before listing: another tick (or you, from the app) may have listed
+    # him already, and a second listing on the same player is at best noise.
+    already = {str((r.get("playerMaster") or {}).get("id"))
+               for r in client.market(p["league_id"]) or []
+               if r.get("discr") == "marketPlayerTeam"}
+    if str(p.get("player_id")) in already:
+        return {"status": "already_listed", "nombre": p.get("nombre")}
+    resp = client.sell_player(p["league_id"], p["player_team_id"], int(p["price"]))
+    events.emit("sell", f"Listed: {p.get('nombre')} at {int(p['price']):,}",
+                detail={"reserve": p.get("price"), "value": p.get("value")},
+                status="plan")
+    return {"status": "listed", "nombre": p.get("nombre"),
+            "price": p.get("price"), "response": resp}
 
 
 @scheduler.executor(REMINDER)
@@ -222,6 +245,87 @@ def _queue_reminders(report, dry_run=False):
     return queued
 
 
+def handle_offers(ctx):
+    """Decide every open offer on our listed players. Runs on EVERY tick.
+
+    Offers arrive and expire between reviews, so this cannot wait for the hourly
+    cycle. It is deliberately cheap: one market read plus the reserve prices the
+    last review cached, no lineup optimisation.
+    """
+    from .strategy import offers as offers_mod
+
+    store = get_storage()
+    reserves = store.get_doc("reserves", {}) or {}
+    if not reserves:
+        return {"status": "skipped", "reason": "no reserves cached yet"}
+    if not (config.AUTO_SELLS or config.DECLINE_LOWBALLS):
+        return {"status": "skipped", "reason": "offer handling is off"}
+
+    client = ctx.get_client()
+    lid, tid = client.default_ids()
+    team = client.team(lid, tid)
+    decisions = offers_mod.evaluate_offers(team, client.market(lid),
+                                           reserves=reserves)
+    if not decisions:
+        return {"status": "ok", "offers": 0}
+
+    accepted, declined, skipped = [], [], []
+    for d in decisions:
+        if ctx.out_of_time():
+            skipped.append(d)
+            continue
+        try:
+            if d["action"] == offers_mod.ACCEPT:
+                if not config.AUTO_SELLS or ctx.dry_run:
+                    skipped.append({**d, "why": "AUTO_SELLS is off"})
+                    continue
+                client.accept_offer(lid, d["market_id"], d["offer_id"], d["amount"])
+                events.emit("sell", f"SOLD {d['nombre']} for {d['amount']:,}",
+                            detail={"reserve": d["reserve"], "value": d["value"],
+                                    "in_xi": d["in_xi"]})
+                accepted.append(d)
+            elif config.DECLINE_LOWBALLS and not ctx.dry_run:
+                client.decline_offer(lid, d["market_id"], d["offer_id"])
+                declined.append(d)
+            else:
+                skipped.append(d)
+        except Exception as e:                   # noqa: BLE001
+            # One bad offer must not stop the rest — the next one may be the good
+            # one. Recorded, not swallowed.
+            events.emit("error", f"Offer on {d.get('nombre')} failed: {e}",
+                        status="error")
+            skipped.append({**d, "error": str(e)})
+    return {"status": "ok", "accepted": accepted, "declined": declined,
+            "skipped": skipped, "offers": len(decisions)}
+
+
+def _plan_listings(ctx, client, lid, team, best, sells):
+    """Queue a listing for every squad player not already on the market."""
+    from .strategy import offers as offers_mod
+
+    store = get_storage()
+    market = client.market(lid)
+    store.put_doc("reserves", offers_mod.reserve_map(team, best, sells))
+    if not config.AUTO_LIST or ctx.dry_run:
+        return {"mode": "off" if not config.AUTO_LIST else "dry-run",
+                "listed": [], "would_list": offers_mod.plan_listings(
+                    team, market, best, sells)}
+
+    queued = []
+    for row in offers_mod.plan_listings(team, market, best, sells):
+        scheduler.schedule(
+            scheduler.LIST_SQUAD,
+            {"league_id": lid, **row},
+            execute_at=utcnow(),
+            # One listing attempt per player per day: if a listing lapses unsold,
+            # tomorrow's review puts him back up at a freshly computed reserve.
+            idempotency_key=f"list:{lid}:{row['player_team_id']}:"
+                            f"{date.today().isoformat()}",
+            expires_at=utcnow() + timedelta(hours=12))
+        queued.append(row)
+    return {"mode": "on", "listed": queued}
+
+
 def run_review(ctx, force=False):
     """The full human-like review, plus the autonomous actions it authorises."""
     store = get_storage()
@@ -245,6 +349,14 @@ def run_review(ctx, force=False):
                       if not (config.AUTO_EXECUTE and config.AUTO_LINEUP)
                       else _apply_best_lineup(ctx, client, lid, tid, team))
         bids_res = _plan_bids(ctx, client, lid, team, report)
+        best = None
+        try:
+            from .strategy import lineup as lineup_opt
+            best = lineup_opt.optimize(team)
+        except ValueError:
+            pass          # incomplete squad: reserves fall back to squad premiums
+        listings = _plan_listings(ctx, client, lid, team, best,
+                                  report.get("sells"))
         reminders = _queue_reminders(report, dry_run=ctx.dry_run)
 
         store.put_doc("last_review_at", to_iso(now))
@@ -254,7 +366,7 @@ def run_review(ctx, force=False):
                             "tasks": len(report.get("tasks") or []),
                             "scheduled_bids": len(bids_res.get("scheduled") or [])})
         return {"status": "ok", "money": report.get("money"),
-                "lineup": lineup_res, "bids": bids_res,
+                "lineup": lineup_res, "bids": bids_res, "listings": listings,
                 "reminders_queued": reminders,
                 "tasks": len(report.get("tasks") or [])}
     finally:
@@ -328,6 +440,14 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
 
     try:
         summary["actions"] = scheduler.run_due(ctx, log=log)
+
+        # Offers arrive and expire between reviews, so they are handled on every
+        # tick — not on the hourly cycle.
+        if not ctx.out_of_time(margin=8):
+            try:
+                summary["offers"] = handle_offers(ctx)
+            except Exception as e:               # noqa: BLE001
+                summary["offers"] = {"status": "error", "error": str(e)}
 
         # A sniper tick exists only to hit a close; it must not spend its seconds
         # on a market review.

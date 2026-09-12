@@ -178,7 +178,15 @@ AUTO_EXECUTE = _flag("FANTASYBOT_AUTO_EXECUTE", True)
 AUTO_LINEUP = _flag("FANTASYBOT_AUTO_LINEUP", True)
 AUTO_BIDS = _flag("FANTASYBOT_AUTO_BIDS", True)
 AUTO_CLAUSES = _flag("FANTASYBOT_AUTO_CLAUSES", False)   # irreversible spend
-AUTO_SELLS = _flag("FANTASYBOT_AUTO_SELLS", False)       # irreversible-ish
+# Keep the whole squad standing on the market. Listing is not selling — it is an
+# ask — so this is safe on its own: nothing leaves without AUTO_SELLS.
+AUTO_LIST = _flag("FANTASYBOT_AUTO_LIST", True)
+# Accept offers that meet a player's reserve price. This is the one that parts
+# with players, so it is off unless you turn it on.
+AUTO_SELLS = _flag("FANTASYBOT_AUTO_SELLS", False)
+# Decline offers below the reserve instead of letting them sit until the listing
+# expires. Keeps the decision ours rather than the platform's.
+DECLINE_LOWBALLS = _flag("FANTASYBOT_DECLINE_LOWBALLS", True)
 
 # --- LLM ---------------------------------------------------------------------
 # "none" keeps the bot 100% deterministic (and 100% free). Anything else turns on
