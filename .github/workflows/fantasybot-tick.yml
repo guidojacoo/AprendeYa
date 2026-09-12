@@ -84,8 +84,18 @@ jobs:
         env:
           FORCE_INPUT: ${{ inputs.force }}
           DRY_INPUT: ${{ inputs.dry_run }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -uo pipefail
+
+          # A push fires this job and the Vercel build at the same moment, so an
+          # immediate call reaches the deployment being replaced — which makes a
+          # post-deploy check a check of the previous deploy. Wait for the build
+          # before asking it anything.
+          if [ "$EVENT" = "push" ]; then
+            echo "Waiting for the Vercel build before the post-deploy tick..."
+            sleep 150
+          fi
 
           call() {
             # $1 = mode. Returns the JSON body; a transport failure yields {}.
