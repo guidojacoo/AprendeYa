@@ -58,7 +58,9 @@ class GapSignings(StorageTestCase):
     def test_it_skips_a_player_who_will_not_start(self):
         res = self._plan([self._cand(prob=10)])
         self.assertEqual(res["queued"], [])
-        self.assertIn("no affordable starter", res["skipped"][0]["why"])
+        # Spanish on purpose: this string is shown on the page, not logged.
+        self.assertIn("titular que entre en la caja",
+                      res["skipped"][0]["why"])
 
     def test_it_skips_an_unavailable_player(self):
         self.assertEqual(self._plan([self._cand(disponible=False)])["queued"], [])

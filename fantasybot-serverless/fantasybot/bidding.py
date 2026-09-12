@@ -183,8 +183,8 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
             resp = fc.make_bid(league_id, market_id, amount)
             log(f"[bid] {nombre}: BID {amount:,} placed "
                 f"(value {value:,}, other_bids={other_bids}, {int(left)}s left)")
-            events.emit("bid", f"Last-minute bid: {amount:,} for {nombre}",
-                        detail={"rival_bids": other_bids, "time_left": f"{int(left)}s"})
+            events.emit("bid", f"Puja al cierre: {amount:,} € por {nombre}",
+                        detail={"pujas rivales": other_bids, "quedaban": f"{int(left)}s"})
             return {"status": "bid", "amount": amount, "market_id": market_id,
                     "nombre": nombre, "other_bids": other_bids,
                     "bid_id": resp.get("id") if isinstance(resp, dict) else None,
@@ -214,9 +214,9 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
                 resp = fc.make_bid(league_id, market_id, amount)
                 log(f"[bid] {nombre}: BID {amount:,} placed as LAST CALL "
                     f"({int(left)}s left, no later tick before the close)")
-                events.emit("bid", f"Last-call bid: {amount:,} for {nombre}",
-                            detail={"rival_bids": other_bids,
-                                    "time_left": f"{int(left)}s",
+                events.emit("bid", f"Puja de último recurso: {amount:,} € por {nombre}",
+                            detail={"pujas rivales": other_bids,
+                                    "quedaban": f"{int(left)}s",
                                     "why": "no quedaba otra ejecución antes "
                                            "del cierre"})
                 return {"status": "bid", "amount": amount, "last_call": True,

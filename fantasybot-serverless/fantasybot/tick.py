@@ -228,7 +228,7 @@ def _execute_clause(ctx, action):
                           f"{config.CASH_RESERVE:,} reserve"}
 
     resp = client.pay_buyout_clause(lid, player_id, current)
-    events.emit("clause", f"BOUGHT {nombre} via clause for {current:,}",
+    events.emit("clause", f"COMPRADO {nombre} por cláusula: {current:,} €",
                 detail={"was_planned_at": p.get("planned_clause"),
                         "balance_after": money - current})
     notify.send(f"clause:{player_id}",
@@ -257,8 +257,8 @@ def _execute_shield(ctx, action):
     except Exception:
         pass          # the check is an optimisation, not a precondition
     resp = client.shield_player(lid, ptid)
-    events.emit("note", f"Shielded {p.get('nombre')} "
-                        f"(clause {int(p.get('clause') or 0):,})",
+    events.emit("note", f"Blindado {p.get('nombre')} "
+                        f"(cláusula {int(p.get('clause') or 0):,} €)",
                 detail={"value": p.get("value"), "reason": p.get("reason")})
     return {"status": "shielded", "nombre": p.get("nombre"), "response": resp}
 
@@ -278,7 +278,7 @@ def _execute_listing(ctx, action):
     if str(p.get("player_id")) in already:
         return {"status": "already_listed", "nombre": p.get("nombre")}
     resp = client.sell_player(p["league_id"], p["player_team_id"], int(p["price"]))
-    events.emit("sell", f"Listed: {p.get('nombre')} at {int(p['price']):,}",
+    events.emit("sell", f"En venta: {p.get('nombre')} a {int(p['price']):,} €",
                 detail={"reserve": p.get("price"), "value": p.get("value")},
                 status="plan")
     return {"status": "listed", "nombre": p.get("nombre"),
@@ -288,7 +288,7 @@ def _execute_listing(ctx, action):
 @scheduler.executor(REMINDER)
 def _execute_reminder(ctx, action):
     p = action.get("payload") or {}
-    events.emit("note", p.get("message") or "Reminder",
+    events.emit("note", p.get("message") or "Recordatorio",
                 detail={"event_at": p.get("event_at")})
     key = p.get("key")
     if key:
@@ -375,7 +375,8 @@ def _plan_bids(ctx, client, lid, team, report):
         mid = str(b["market_id"])
         close_at = (by_id.get(mid) or {}).get("expires_at")
         if not close_at:
-            skipped.append({"market_id": mid, "reason": "no close time on the listing"})
+            skipped.append({"market_id": mid, "nombre": b.get("nombre"),
+                            "reason": "el anuncio no trae hora de cierre"})
             continue
         capped = bidding.cap_against_rivals(
             b["amount"], (by_id.get(mid) or {}).get("valor_actual"), reach)
@@ -383,7 +384,8 @@ def _plan_bids(ctx, client, lid, team, report):
             row = scheduler.schedule_bid(lid, mid, capped, close_at,
                                          nombre=b.get("nombre"))
         except ValueError as e:
-            skipped.append({"market_id": mid, "reason": str(e)})
+            skipped.append({"market_id": mid, "nombre": b.get("nombre"),
+                            "reason": f"no pude programarla: {e}"})
             continue
         state.complete_by_key(f"sell:{(by_id.get(mid) or {}).get('player_id')}")
         why = explain.bid(by_id.get(mid) or {"nombre": b.get("nombre")},
@@ -392,7 +394,7 @@ def _plan_bids(ctx, client, lid, team, report):
                           "max_bid": capped, "computed_cap": b["amount"],
                           "rival_reach": reach, "close_at": to_iso(close_at),
                           "why": why, "status": row.get("status")})
-        events.emit("bid-plan", f"Last-minute bid scheduled: {b.get('nombre') or mid}",
+        events.emit("bid-plan", f"Puja programada para el cierre: {b.get('nombre') or mid}",
                     detail={"why": why, "closes": to_iso(close_at),
                             "capped_from": (f"{b['amount']:,}"
                                             if capped < b["amount"] else None)},
@@ -444,14 +446,15 @@ def _plan_gap_signings(ctx, lid, team, report):
             pick = (c, cap)
             break
         if pick is None:
-            skipped.append({"pos": pos, "why": "no affordable starter available"})
+            skipped.append({"pos": pos,
+                            "why": "no hay ningún titular que entre en la caja"})
             continue
         c, cap = pick
         try:
             scheduler.schedule_bid(lid, c["market_id"], cap, c["expires"],
                                    nombre=c.get("nombre"))
         except ValueError as e:
-            skipped.append({"pos": pos, "why": str(e)})
+            skipped.append({"pos": pos, "why": f"no pude programarla: {e}"})
             continue
         committed += cap
         # The task existed to tell a human to go and sign somebody. The bot just
@@ -462,8 +465,8 @@ def _plan_gap_signings(ctx, lid, team, report):
         queued.append({"pos": pos, "nombre": c.get("nombre"),
                        "max_bid": cap, "prob": c.get("prob"),
                        "closes": c.get("expires"), "why": why})
-        events.emit("bid-plan", f"Gap signing queued: {c.get('nombre')} "
-                                f"for the empty {pos} slot",
+        events.emit("bid-plan", f"Fichaje programado: {c.get('nombre')} "
+                                f"para el hueco en {pos}",
                     detail={"why": why, "closes": c.get("expires")},
                     status="plan")
         notify.send(f"gap:{pos}:{date.today().isoformat()}",
@@ -525,8 +528,8 @@ def _plan_clauses(ctx, lid, team, report):
         state.complete_by_key(f"clause:{t.get('player_id')}")
         why = explain.clause(t, clause)
         queued.append({**_target_brief(t), "unlock": to_iso(unlock), "why": why})
-        events.emit("bid-plan", f"Clause queued: {t.get('nombre')} "
-                                f"for {clause:,}",
+        events.emit("bid-plan", f"Cláusula programada: {t.get('nombre')} "
+                                f"por {clause:,} €",
                     detail={"why": why, "unlocks": to_iso(unlock)},
                     status="plan")
     return {"mode": "on" if config.AUTO_CLAUSES else "off",
@@ -739,7 +742,7 @@ def handle_offers(ctx):
                     skipped.append({**d, "why": "AUTO_SELLS is off"})
                     continue
                 client.accept_offer(lid, d["market_id"], d["offer_id"], d["amount"])
-                events.emit("sell", f"SOLD {d['nombre']} for {d['amount']:,}",
+                events.emit("sell", f"VENDIDO {d['nombre']} por {d['amount']:,} €",
                             detail={"why": d["why"]})
                 notify.send(f"sold:{d['player_id']}", d["why"], level="good")
                 accepted.append(d)
@@ -751,7 +754,7 @@ def handle_offers(ctx):
         except Exception as e:                   # noqa: BLE001
             # One bad offer must not stop the rest — the next one may be the good
             # one. Recorded, not swallowed.
-            events.emit("error", f"Offer on {d.get('nombre')} failed: {e}",
+            events.emit("error", f"Falló la oferta por {d.get('nombre')}: {e}",
                         status="error")
             skipped.append({**d, "error": str(e)})
     return {"status": "ok", "accepted": accepted, "declined": declined,
@@ -865,10 +868,11 @@ def run_review(ctx, force=False):
         store.put_doc("last_report",
                       _summarize(report, lineup_res, bids_res, listings,
                                  clauses, shield, sources, gaps_res))
-        events.emit("review", f"Review: balance {report['money']:,}",
+        events.emit("review", f"Revisión: caja {report['money']:,} €",
                     detail={"flips": len(report.get("flips") or []),
                             "tasks": len(report.get("tasks") or []),
                             "scheduled_bids": len(bids_res.get("scheduled") or [])})
+        _note_market_read(report)
         if skipped:
             events.emit("note", f"Revisión acortada por tiempo: "
                                 f"{', '.join(skipped)}",
@@ -886,6 +890,30 @@ def run_review(ctx, force=False):
         store.release_lock(REVIEW_LOCK, holder)
 
 
+def _note_market_read(report):
+    """One line in the log for the whole market, winners and losers.
+
+    An event per declined listing would bury the log forty rows deep every hour.
+    One line naming the best of each side is what a person actually reads, and
+    the scored table on the page is there for the rest.
+    """
+    market = report.get("market") or []
+    if not market:
+        return
+    best = market[0]
+    worst = next((o for o in reversed(market)
+                  if o.get("verdict") in ("no vale la pena", "no alcanza")), None)
+    title = (f"Miré {len(market)} jugadores del mercado. El mejor: "
+             f"{best.get('nombre')} ({best.get('score')}/100, "
+             f"{best.get('verdict')})")
+    detail = {"why": best.get("headline") or (best.get("reasons") or [""])[0]}
+    if worst is not None:
+        detail["descartado"] = (f"{worst.get('nombre')} "
+                                f"({worst.get('score')}/100): "
+                                f"{worst.get('headline') or ''}")
+    events.emit("note", title, detail=detail)
+
+
 def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
                shield=None, sources=None, gaps_res=None):
     """What the dashboard reads. Deliberately small: a full review payload is
@@ -900,6 +928,9 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "lineup_result": lineup_res,
         "gaps": report.get("gaps"),
         "flips": (report.get("flips") or [])[:5],
+        # The whole market, scored — including everything declined. Trimmed to
+        # what a phone can render, not to what the bot considered.
+        "market": (report.get("market") or [])[:30],
         "sells": (report.get("sells") or [])[:5],
         "clause_targets": (report.get("clause_targets") or [])[:5],
         "tasks": report.get("tasks") or [],
@@ -944,7 +975,7 @@ def run_llm_strategy(ctx, force=False):
     try:
         res = llm_strategy.run(ctx)
     except Exception as e:                       # noqa: BLE001
-        events.emit("error", f"LLM pass failed: {e}", status="error")
+        events.emit("error", f"Falló la pasada del LLM: {e}", status="error")
         return {"status": "error", "error": str(e)}
     store.put_doc("last_llm_at", to_iso(now))
     return res
@@ -1022,7 +1053,7 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         try:
             store.finish_execution(execution_id, FAILED, summary=summary,
                                    error=summary["error"])
-            events.emit("error", f"Tick failed: {e}", status="error")
+            events.emit("error", f"Falló la ejecución: {e}", status="error")
             _note_health(store, ok=False, error=summary["error"])
         except Exception:
             pass

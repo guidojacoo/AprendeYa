@@ -18,6 +18,7 @@ from .matching import match_name, POS
 from .strategy import captain as captain_mod
 from .strategy import flip, needs as needs_mod, sell as sell_mod
 from .strategy import lineup as lineup_opt
+from .strategy import scoring
 from .strategy import shield as shield_mod
 from .sources.lineups import probable_lineups
 from .sources.market_trends import trends_index
@@ -260,8 +261,15 @@ def review(client, days_to_matchday=None):
 
     # 3) flips, needs and sales
     owned = {p["playerMaster"]["id"] for p in team["players"]}
-    flips = [o for o in flip.opportunities(client, lid, owned=owned)
+    # One pass over the market, two readings of it. `flips` is what the bot will
+    # act on; `market` is everything it looked at, scored, including what it
+    # turned down — which is the half that used to be invisible and the half you
+    # ask about when a player you wanted goes to somebody else.
+    ops = flip.opportunities(client, lid, owned=owned)
+    flips = [o for o in ops
              if o["margin_pct"] > 0 and o["buy_price"] <= team["teamMoney"]][:5]
+    market = scoring.rank(ops, prob_index=prob_index, money=team["teamMoney"],
+                          limit=40)
     gaps = needs_mod.gaps(team)
     needs_report = needs_mod.advise(client, lid, team, days_to_matchday)
     # A missing lineup (incomplete squad) only skips the lineup itself — sells, flips,
@@ -349,6 +357,7 @@ def review(client, days_to_matchday=None):
         "matchday": {"kickoff": kickoff, "days": days_to_matchday},
         "lineup": lineup_section,
         "flips": flips,
+        "market": market,
         "gaps": gaps,
         "needs": needs_report,
         "sells": sells,

@@ -142,7 +142,7 @@ def run(ctx):
                                  "why": (decision.get("summary") or "")[:400]})
     if decision.get("memory"):
         store.put_doc("agent_memory", str(decision["memory"])[:2000])
-    events.emit("note", "Strategic pass",
+    events.emit("note", "Pasada estratégica",
                 detail={"summary": (decision.get("summary") or "")[:300],
                         "applied": applied})
     return {"status": "ok", "model": info.get("model"),

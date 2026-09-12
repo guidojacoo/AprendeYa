@@ -148,7 +148,7 @@ def sync_bids(client, league_id, team, dry_run=True):
                 except Exception:
                     pass
                 bids.pop(mid, None)
-                events.emit("cancel", f"Bid cancelled: {info.get('nombre', mid)}",
+                events.emit("cancel", f"Puja cancelada: {info.get('nombre', mid)}",
                             detail="no longer profitable")
             cancelled.append(info.get("nombre", mid))
     # place new bids
@@ -158,7 +158,7 @@ def sync_bids(client, league_id, team, dry_run=True):
             bid_id = resp.get("id") if isinstance(resp, dict) else None
             bids[b["market_id"]] = {"bid_id": bid_id, "amount": b["amount"],
                                     "nombre": b["nombre"]}
-            events.emit("bid", f"Bid {b['amount']:,} for {b['nombre']}",
+            events.emit("bid", f"Puja de {b['amount']:,} € por {b['nombre']}",
                         detail={"margin": f"{b['margin_pct']}%"})
         placed.append(b)
 

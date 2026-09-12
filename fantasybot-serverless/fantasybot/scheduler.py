@@ -177,7 +177,7 @@ def _run_one(store, action, ctx, now, log):
         # rather than hammering an endpoint that is clearly refusing us.
         status = PENDING if attempts < ctx.max_attempts else FAILED
         store.finish_action(action, status, error=f"{type(e).__name__}: {e}")
-        events.emit("error", f"Action {atype} failed: {e}", status="error",
+        events.emit("error", f"Falló la acción {atype}: {e}", status="error",
                     detail={"key": key, "attempt": attempts})
         log(f"[tick] {atype} {key} FAILED (attempt {attempts}): {e}")
         return {"key": key, "type": atype, "status": status, "error": str(e)}

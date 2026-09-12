@@ -78,6 +78,10 @@
   nav{display:flex;gap:6px;margin-top:10px;overflow-x:auto;
     scrollbar-width:none;-ms-overflow-style:none}
   nav::-webkit-scrollbar{display:none}
+  /* Six tabs do not fit on a phone, and a hidden scrollbar turns the sixth from
+     off-screen into invisible. The fade is the only thing saying "keep going". */
+  nav.more{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent);
+    mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent)}
   nav button{border:0;background:transparent;color:var(--muted);padding:7px 11px;
     border-radius:8px;white-space:nowrap;font-size:13.5px}
   nav button.on{background:var(--brand-bg);color:var(--brand-d);font-weight:650}
@@ -125,6 +129,23 @@
   .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
   .me{background:var(--brand-bg)}
   .tag{font-size:10.5px;padding:1px 6px;border-radius:5px;font-weight:650}
+
+  /* ---- scored market ---- */
+  .score{display:inline-block;min-width:30px;text-align:center;font-family:var(--mono);
+    font-weight:700;font-size:12px;padding:2px 6px;border-radius:6px}
+  /* The reasons are the part worth reading, so opening one is a tap, not a
+     hover: this is read on a phone more than anywhere else. */
+  details.why summary{cursor:pointer;list-style:none;padding:10px 13px;
+    border-bottom:1px solid var(--line);display:flex;gap:9px;align-items:center}
+  details.why summary::-webkit-details-marker{display:none}
+  details.why summary:hover{background:var(--surface2)}
+  details.why[open] summary{border-bottom:0}
+  details.why ul{margin:0;padding:0 13px 12px 32px;color:var(--muted);
+    font-size:12.5px;line-height:1.55;border-bottom:1px solid var(--line)}
+  details.why li{margin:3px 0}
+  details.why:last-child ul{border-bottom:0}
+  .grow{flex:1;min-width:0}
+  .grow b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
   /* ---- gate ---- */
   #gate{max-width:380px;margin:14vh auto;padding:22px;background:var(--surface);
@@ -195,6 +216,9 @@
     <!-- MERCADO -->
     <div data-panel="mercado" class="hide">
       <section><h2>Por qué hace lo que hace</h2><div id="why"></div></section>
+      <section><h2>Todo el mercado, puntuado</h2>
+        <div class="note">Tocá un jugador para ver el razonamiento.</div>
+        <div class="scroll" id="market"></div></section>
       <section><h2>Ofertas recibidas</h2><div id="offers"></div></section>
       <section><h2>Oportunidades de compra</h2><div class="scroll" id="flips"></div></section>
       <section><h2>Cláusulas programadas</h2><div id="clauses"></div></section>
@@ -205,10 +229,12 @@
     <!-- COLA -->
     <div data-panel="cola" class="hide">
       <section><h2>Acciones programadas</h2><div id="pending"></div></section>
+      <section><h2>Pujas: qué pasó con cada una</h2><div id="bids"></div></section>
     </div>
 
     <!-- LIGA -->
     <div data-panel="liga" class="hide">
+      <section><h2>Análisis de la partida</h2><div id="analysis"></div></section>
       <section><h2>Clasificación y caja estimada</h2>
         <div class="scroll" id="rivals"></div></section>
     </div>
@@ -378,6 +404,18 @@ function render(d){
   push('BLINDA','ok',(rep.shield||{}).queued);
   push('ONCE','idle',rep.lineup_result);
   (((rep.listings||{}).listed)||[]).slice(0,6).forEach(x=>push('VENTA','idle',x));
+  /* Lo que MIRÓ y descartó. Sin esto la página solo cuenta la mitad: la que
+     salió bien. La pregunta que uno hace es por el jugador que se le escapó. */
+  (((rep.bids||{}).skipped)||[]).forEach(x=>why.push(['NO PUJA','bad',
+    {why:(x.nombre||x.market_id)+': '+x.reason}]));
+  (((rep.gap_signings||{}).skipped)||[]).forEach(x=>why.push(['NO FICHA','bad',
+    {why:'Hueco en '+x.pos+': '+x.why}]));
+  (((rep.clauses||{}).skipped)||[]).forEach(x=>why.push(['NO PAGA','bad',
+    {why:(x.nombre||'')+': '+(x.why||x.reason||'')}]));
+  (rep.market||[]).filter(o=>o.verdict==='no vale la pena'||o.verdict==='no alcanza')
+    .slice(0,4).forEach(o=>why.push(['DESCARTA','bad',
+      {why:o.nombre+' ('+o.score+'/100): '
+        +(o.headline||(o.reasons||[])[0]||'')}]));
   list($('why'),why,([kind,cls,item])=>
     '<div class="row"><span class="tag '+cls+'">'+esc(kind)+'</span>'
     +'<div class="m">'+esc(item.why)+'</div></div>',
@@ -394,6 +432,21 @@ function render(d){
     +'</small></div><div class="right">'+esc(short(o.amount))+'</div></div>',
     off.status==='skipped'?('Sin evaluar: '+esc(off.reason||'')):'Nadie ofertó todavía.');
   $('c-mercado').textContent=rows.length?rows.length:'';
+
+  /* ---- el mercado entero, puntuado ---- */
+  const mk=rep.market||[];
+  const scls=n=>n>=70?'ok':n>=58?'idle':n>=45?'warn':'bad';
+  $('market').innerHTML=mk.length
+    ? mk.map(o=>'<details class="why"><summary>'
+        +'<span class="score '+scls(o.score)+'">'+esc(o.score)+'</span>'
+        +'<span class="grow"><b>'+esc(o.nombre)+'</b>'
+        +'<small>'+esc(o.pos||'?')+' · '+esc(o.via||'')+' · '
+        +esc(o.verdict)+'</small></span>'
+        +'<span class="num">'+esc(short(o.buy_price))+'</span></summary>'
+        +'<ul>'+(o.reasons||[]).map(r=>'<li>'+esc(r)+'</li>').join('')
+        +(o.expires_at?'<li>Cierra '+esc(when(o.expires_at,true))+'.</li>':'')
+        +'</ul></details>').join('')
+    : '<div class="empty">Todavía no analizó el mercado — esperá a la primera revisión.</div>';
 
   const flips=rep.flips||[];
   $('flips').innerHTML=flips.length
@@ -418,14 +471,76 @@ function render(d){
   /* ---- cola ---- */
   const pend=d.pending_actions||[];
   $('c-cola').textContent=pend.length?pend.length:'';
+  const ATYPE={bid:'puja',review:'revisión',lineup:'alineación',
+    reminder:'aviso',llm_strategy:'estrategia',list_squad:'poner en venta',
+    clause:'cláusula',shield:'blindaje',warm_sources:'refrescar datos'};
   list($('pending'),pend,a=>{
     const p=a.payload||{};
     return '<div class="row"><div class="t">'+esc(when(a.execute_at,true))+'</div>'
-      +'<div class="m"><b>'+esc(a.type)+'</b> '
+      +'<div class="m"><b>'+esc(ATYPE[a.type]||a.type)+'</b> '
       +esc(p.nombre||p.message||p.market_id||'')
       +(p.max_bid?' <span class="tag idle">tope '+esc(short(p.max_bid))+'</span>':'')
       +'<small>'+esc(a.status)+' · '+esc(ago(a.execute_at))+'</small></div></div>';
   },'No hay nada programado.');
+
+  /* ---- pujas: qué pasó con cada una ---- */
+  const BID={bid:['ok','pujó'],already:['idle','ya tenía puja'],
+    gone:['bad','el anuncio ya no estaba'],closed:['bad','cerró sin pujar'],
+    waiting:['warn','esperando el cierre'],unpriced:['warn','sin precio usable']};
+  const bidrows=[];
+  (d.executions||[]).forEach(x=>((x.summary||{}).actions||[]).forEach(a=>{
+    if(a.type!=='bid')return;
+    const r=a.result||{}, k=BID[r.status]||null;
+    bidrows.push({at:x.started_at,
+      nombre:r.nombre||(a.key||'').split(':')[2]||'?',
+      cls:a.status==='failed'?'bad':a.reason==='expired'?'bad':(k?k[0]:'idle'),
+      label:a.reason==='expired'?'venció sin ejecutarse'
+            :a.status==='failed'?'falló':(k?k[1]:(r.status||a.status)),
+      amount:r.amount,
+      why:r.last_call?'Pujó antes de tiempo: no quedaba otra ejecución antes del cierre.'
+          :(a.error||'')});
+  }));
+  list($('bids'),bidrows,b=>
+    '<div class="row"><span class="tag '+b.cls+'">'+esc(b.label)+'</span>'
+    +'<div class="m"><b>'+esc(b.nombre)+'</b>'
+    +'<small>'+esc(when(b.at,true))+(b.why?' · '+esc(b.why):'')+'</small></div>'
+    +'<div class="right">'+(b.amount?esc(short(b.amount)):'')+'</div></div>',
+    'Todavía no se ejecutó ninguna puja.');
+
+  /* ---- análisis de la partida ---- */
+  const rv0=rep.rivals||[], pnl=rep.pnl||null;
+  const leader=rv0.find(r=>r.position===1)||rv0[0];
+  const richest=Math.max(0,...rv0.filter(r=>!r.is_me).map(r=>r.cash||0));
+  const arow=(k,v,note)=>'<div class="row"><div class="m">'+esc(k)
+    +(note?'<small>'+esc(note)+'</small>':'')+'</div>'
+    +'<div class="right">'+v+'</div></div>';
+  const money=n=>'<span class="num">'+esc(short(n))+'</span>';
+  const an=[];
+  if(pnl){
+    const net=Number(pnl.net||0);
+    an.push(arow('Beneficio del mercado',
+      '<span class="tag '+(net>=0?'ok':'bad')+'">'+(net>=0?'+':'')+esc(short(net))
+      +'</span>','compras '+short(pnl.purchases)+' · ventas '+short(pnl.sales)));
+    an.push(arow('Valor de la plantilla',money(pnl.team_value)));
+  }
+  an.push(arow('Caja disponible',money(rep.money),
+    richest?('el rival más rico tiene ~'+short(richest)):''));
+  if(me&&leader){
+    const gap=(leader.points||0)-(me.points||0);
+    an.push(arow('Posición','<span class="tag '+(me.position===1?'ok':'idle')+'">#'
+      +esc(me.position)+'</span>',
+      me.position===1?'sos el líder':('a '+gap+' pts de '+(leader.manager||'la cabeza'))));
+  }
+  if(st)an.push(arow('Postura',
+    '<span class="tag '+(STANCE[st.stance]||['idle'])[0]+'">'
+    +esc((STANCE[st.stance]||[,st.stance])[1]||st.stance)+'</span>',st.why||''));
+  const gp=rep.gaps||[];
+  an.push(arow('Huecos en la plantilla',
+    gp.length?('<span class="tag bad">'+esc(gp.join(', '))+'</span>')
+             :'<span class="tag ok">ninguno</span>',
+    gp.length?'un puesto vacío cuesta puntos cada jornada':''));
+  $('analysis').innerHTML=an.length?an.join('')
+    :'<div class="empty">Sin análisis todavía.</div>';
 
   /* ---- liga ---- */
   const rv=rep.rivals||[];
@@ -440,11 +555,31 @@ function render(d){
     :'<div class="empty">Sin análisis de rivales todavía.</div>';
 
   /* ---- eventos ---- */
-  list($('events'),d.events,e=>
-    '<div class="row"><div class="t">'+esc(when(e.iso,true))+'</div>'
-    +'<div class="m"><b>'+esc(e.kind)+'</b> '+esc(e.title)
-    +(e.detail?'<small>'+esc(typeof e.detail==='string'?e.detail:JSON.stringify(e.detail))+'</small>':'')
-    +'</div></div>','Todavía sin eventos.');
+  /* El detalle venía como JSON crudo, que es legible para mí y para nadie más.
+     `why` es la frase escrita para leerse, así que va primero y entera. */
+  const detail=v=>{
+    if(v==null||v==='')return '';
+    if(typeof v!=='object')return esc(v);
+    const out=[];
+    if(v.why)out.push(esc(v.why));
+    Object.keys(v).forEach(k=>{
+      if(k==='why'||v[k]==null||v[k]==='')return;
+      out.push(esc(k.replace(/_/g,' '))+': '
+        +esc(typeof v[k]==='object'?JSON.stringify(v[k]):v[k]));
+    });
+    return out.join(' · ');
+  };
+  const EV={bid:['ok','PUJA'],'bid-plan':['idle','PLAN'],sell:['ok','VENTA'],
+    clause:['warn','CLÁUSULA'],lineup:['idle','ONCE'],review:['idle','REVISIÓN'],
+    note:['idle','NOTA'],cancel:['warn','CANCELA'],error:['bad','ERROR'],
+    read:['idle','LECTURA']};
+  list($('events'),d.events,e=>{
+    const k=EV[e.kind]||['idle',String(e.kind||'').toUpperCase()];
+    const d2=detail(e.detail);
+    return '<div class="row"><span class="tag '+(e.status==='error'?'bad':k[0])+'">'
+      +esc(k[1])+'</span><div class="m">'+esc(e.title)
+      +'<small>'+esc(when(e.iso,true))+(d2?' · ':'')+d2+'</small></div></div>';
+  },'Todavía sin eventos.');
 
   /* ---- sistema ---- */
   const a=d.autonomy||{}, llm=d.llm||{};
@@ -515,10 +650,18 @@ function showTab(name){
 document.getElementById('tabs').addEventListener('click',e=>{
   const b=e.target.closest('button'); if(b)showTab(b.dataset.tab);
 });
+const tabsEl=document.getElementById('tabs');
+const tabFade=()=>tabsEl.classList.toggle('more',
+  tabsEl.scrollWidth-tabsEl.scrollLeft-tabsEl.clientWidth>4);
+tabsEl.addEventListener('scroll',tabFade);
+addEventListener('resize',tabFade);
+/* Not at parse time: the app is still display:none then, so every width reads 0
+   and the bar measures as fitting when it does not. */
 
 /* ---------- session ---------- */
 function start(){
   gate.classList.add('hide'); app.classList.remove('hide');
+  tabFade();
   showTab(localStorage.getItem(TKEY)||'resumen');
   setInterval_(interval); load();
   clearInterval(tickTimer); tickTimer=setInterval(countdown,1000);
