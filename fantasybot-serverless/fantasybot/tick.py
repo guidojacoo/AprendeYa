@@ -24,7 +24,7 @@ import traceback
 from datetime import date, timedelta
 
 from . import agent as agent_mod
-from . import bidding, config, events, scheduler
+from . import bidding, config, events, explain, notify, scheduler
 from . import execute as execute_mod
 from . import state
 from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
@@ -42,6 +42,23 @@ _SETTING_DEFAULTS = {
     "auto_execute": config.AUTO_EXECUTE,
     "bid_mode": "snipe",        # "snipe" = last-minute; "immediate" = bid on sight
 }
+
+
+def league_ids(client):
+    """(league_id, team_id), cached.
+
+    `client.default_ids()` resolves them by calling `leagues()` — a real request
+    to an unofficial API, made on EVERY tick, for two values that do not change.
+    At 288 ticks a day that was a third of our entire API footprint spent
+    re-reading a constant.
+    """
+    store = get_storage()
+    cached = store.get_doc("league_ids", None)
+    if isinstance(cached, list) and len(cached) == 2 and all(cached):
+        return cached[0], cached[1]
+    lid, tid = client.default_ids()
+    store.put_doc("league_ids", [lid, tid])
+    return lid, tid
 
 
 def bids_allowed():
@@ -123,7 +140,7 @@ def _execute_clause(ctx, action):
         return {"status": "skipped", "reason": "dry run"}
 
     client = ctx.get_client()
-    lid, tid = client.default_ids()
+    lid, tid = league_ids(client)
     player_id, nombre = p.get("player_id"), p.get("nombre")
     max_pay = int(p.get("max_pay") or 0)
 
@@ -172,6 +189,9 @@ def _execute_clause(ctx, action):
     events.emit("clause", f"BOUGHT {nombre} via clause for {current:,}",
                 detail={"was_planned_at": p.get("planned_clause"),
                         "balance_after": money - current})
+    notify.send(f"clause:{player_id}",
+                f"Fichado {nombre} por cláusula: {current:,} €. "
+                f"Saldo: {money - current:,} €", level="good")
     return {"status": "paid", "nombre": nombre, "amount": current,
             "response": resp}
 
@@ -185,7 +205,7 @@ def _execute_shield(ctx, action):
     if ctx.dry_run:
         return {"status": "skipped", "reason": "dry run"}
     client = ctx.get_client()
-    lid, _ = client.default_ids()
+    lid, _ = league_ids(client)
     ptid = p.get("player_team_id")
     try:
         # A shield already in place makes this a no-op; ask before spending the
@@ -237,7 +257,7 @@ def _execute_reminder(ctx, action):
 @scheduler.executor(LINEUP)
 def _execute_lineup(ctx, action):
     client = ctx.get_client()
-    lid, tid = client.default_ids()
+    lid, tid = league_ids(client)
     team = client.team(lid, tid)
     return _apply_best_lineup(ctx, client, lid, tid, team)
 
@@ -268,7 +288,7 @@ def _apply_best_lineup(ctx, client, lid, tid, team):
     res = execute_mod.apply_lineup(client, tid, best, current,
                                    dry_run=ctx.dry_run or not config.AUTO_LINEUP,
                                    current_coach=coach, current_captain=captain)
-    return {"status": "ok", **res}
+    return {"status": "ok", "why": explain.lineup(res, best), **res}
 
 
 def _plan_bids(ctx, client, lid, team, report):
@@ -297,6 +317,10 @@ def _plan_bids(ctx, client, lid, team, report):
                                         dry_run=ctx.dry_run or not config.AUTO_EXECUTE)}
 
     plan = execute_mod.plan_bids(client, lid, team)
+    # Nobody in the league can outbid money they do not have. The richest rival's
+    # estimated cash is the real ceiling on what any auction can cost us.
+    reach = max(((r.get("cash") or 0) for r in (report.get("rivals") or [])
+                 if not r.get("is_me")), default=0)
     scheduled, skipped = [], []
     # `plan_bids` already fits the targets inside the balance, cheapest commitment
     # first; we only add the timing.
@@ -307,19 +331,100 @@ def _plan_bids(ctx, client, lid, team, report):
         if not close_at:
             skipped.append({"market_id": mid, "reason": "no close time on the listing"})
             continue
+        capped = bidding.cap_against_rivals(
+            b["amount"], (by_id.get(mid) or {}).get("valor_actual"), reach)
         try:
-            row = scheduler.schedule_bid(lid, mid, b["amount"], close_at,
+            row = scheduler.schedule_bid(lid, mid, capped, close_at,
                                          nombre=b.get("nombre"))
         except ValueError as e:
             skipped.append({"market_id": mid, "reason": str(e)})
             continue
+        state.complete_by_key(f"sell:{(by_id.get(mid) or {}).get('player_id')}")
+        why = explain.bid(by_id.get(mid) or {"nombre": b.get("nombre")},
+                          capped, reach if capped < b["amount"] else None)
         scheduled.append({"market_id": mid, "nombre": b.get("nombre"),
-                          "max_bid": b["amount"], "close_at": to_iso(close_at),
-                          "status": row.get("status")})
+                          "max_bid": capped, "computed_cap": b["amount"],
+                          "rival_reach": reach, "close_at": to_iso(close_at),
+                          "why": why, "status": row.get("status")})
         events.emit("bid-plan", f"Last-minute bid scheduled: {b.get('nombre') or mid}",
-                    detail={"max": f"{b['amount']:,}", "closes": to_iso(close_at)},
+                    detail={"why": why, "closes": to_iso(close_at),
+                            "capped_from": (f"{b['amount']:,}"
+                                            if capped < b["amount"] else None)},
                     status="plan")
     return {"mode": "snipe", "scheduled": scheduled, "skipped": skipped}
+
+
+# Don't spend on a signing who will not play. Same floor the clause hunter uses.
+MIN_SIGNING_PROB = 40
+
+
+def _plan_gap_signings(ctx, lid, team, report):
+    """Buy a player for a position we have nobody in.
+
+    This is the difference between a bot that trades well and one that wins. The
+    flip engine only bids on PROFITABLE resales — so a squad missing a goalkeeper
+    would sit there, correctly declining to overpay, fielding ten men and losing
+    points every single gameweek. An empty slot costs more than a bad margin.
+
+    Clauses for gap positions are already handled (`agent.clause_targets` filters
+    on exactly these positions). What was missing is the bidding route.
+
+    Returns the money committed, so the flip planner bids with what is left rather
+    than promising the same euros twice.
+    """
+    needs = report.get("needs") or {}
+    gaps = needs.get("gaps") or {}
+    if not gaps:
+        return {"mode": "on", "queued": [], "committed": 0}
+    if not (config.AUTO_BIDS and config.AUTO_EXECUTE) or ctx.dry_run:
+        return {"mode": "off", "queued": [], "committed": 0,
+                "gaps": list(gaps)}
+
+    budget = max(0, int(team.get("teamMoney") or 0) - config.CASH_RESERVE)
+    queued, skipped, committed = [], [], 0
+    for pos in gaps:
+        pick = None
+        for c in (needs.get("suggestions") or {}).get(pos) or []:
+            if c.get("via") not in ("SISTEMA", "PUJA"):
+                continue          # the clause route is planned elsewhere
+            if not c.get("disponible") or not c.get("expires"):
+                continue
+            prob = c.get("prob")
+            if prob is not None and prob < MIN_SIGNING_PROB:
+                continue          # a benchwarmer does not fill a gap
+            cap = int(c.get("max_bid") or c.get("price") or 0)
+            if not cap or committed + cap > budget:
+                continue
+            pick = (c, cap)
+            break
+        if pick is None:
+            skipped.append({"pos": pos, "why": "no affordable starter available"})
+            continue
+        c, cap = pick
+        try:
+            scheduler.schedule_bid(lid, c["market_id"], cap, c["expires"],
+                                   nombre=c.get("nombre"))
+        except ValueError as e:
+            skipped.append({"pos": pos, "why": str(e)})
+            continue
+        committed += cap
+        # The task existed to tell a human to go and sign somebody. The bot just
+        # did it, so the task is done — leaving it up would make an autonomous
+        # bot look like it was asking for help.
+        state.complete_by_key(f"gap:{pos}")
+        why = explain.gap_signing(pos, c, cap)
+        queued.append({"pos": pos, "nombre": c.get("nombre"),
+                       "max_bid": cap, "prob": c.get("prob"),
+                       "closes": c.get("expires"), "why": why})
+        events.emit("bid-plan", f"Gap signing queued: {c.get('nombre')} "
+                                f"for the empty {pos} slot",
+                    detail={"why": why, "closes": c.get("expires")},
+                    status="plan")
+        notify.send(f"gap:{pos}:{date.today().isoformat()}",
+                    f"Falta un {pos}: pujando por {c.get('nombre')} "
+                    f"hasta {cap:,} €", level="info")
+    return {"mode": "on", "queued": queued, "skipped": skipped,
+            "committed": committed}
 
 
 def _plan_clauses(ctx, lid, team, report):
@@ -371,11 +476,13 @@ def _plan_clauses(ctx, lid, team, report):
             execute_at=unlock,
             idempotency_key=f"clause:{lid}:{t.get('player_id')}:{to_iso(unlock)}",
             expires_at=unlock + timedelta(hours=6))
-        queued.append({**_target_brief(t), "unlock": to_iso(unlock)})
+        state.complete_by_key(f"clause:{t.get('player_id')}")
+        why = explain.clause(t, clause)
+        queued.append({**_target_brief(t), "unlock": to_iso(unlock), "why": why})
         events.emit("bid-plan", f"Clause queued: {t.get('nombre')} "
                                 f"for {clause:,}",
-                    detail={"unlocks": to_iso(unlock), "pos": t.get("pos"),
-                            "prob": t.get("prob")}, status="plan")
+                    detail={"why": why, "unlocks": to_iso(unlock)},
+                    status="plan")
     return {"mode": "on" if config.AUTO_CLAUSES else "off",
             "queued": queued, "skipped": skipped}
 
@@ -401,7 +508,60 @@ def _plan_shield(ctx, lid, report):
         idempotency_key=f"shield:{lid}:{cand.get('player_team_id')}:"
                         f"{date.today().isoformat()}",
         expires_at=utcnow() + timedelta(hours=12))
-    return {"mode": "on", "queued": cand}
+    return {"mode": "on", "queued": {**cand, "why": explain.shield(cand)}}
+
+
+def _days_listed(store, team, market):
+    """How many days each squad player has sat on the market unsold.
+
+    Tracked here rather than read from the API because the listing row carries no
+    "first listed" time — and a player who was sold and re-signed should start
+    the clock again, which only a record of our own can tell us.
+    """
+    listed = {str((r.get("playerMaster") or {}).get("id"))
+              for r in market or [] if r.get("discr") == "marketPlayerTeam"}
+    squad = {str((p.get("playerMaster") or {}).get("id"))
+             for p in team.get("players") or []}
+    since = store.get_doc("listed_since", {}) or {}
+    now, out = utcnow(), {}
+    for pid in squad & listed:
+        first = parse_iso(since.get(pid))
+        if first is None:
+            since[pid] = to_iso(now)
+            first = now
+        out[pid] = (now - first).total_seconds() / 86400
+    # Forget anyone no longer listed (sold, or we pulled him): his clock restarts.
+    for pid in list(since):
+        if pid not in out:
+            since.pop(pid, None)
+    store.put_doc("listed_since", since)
+    return out
+
+
+def _check_sources(report):
+    """Notice when a scraped source quietly stops working.
+
+    futbolfantasy feeds the value trends and the probable lineups. If their HTML
+    changes, the parsers return an empty index and everything DEGRADES rather than
+    failing: flips stop being found, the optimiser falls back to priors, and the
+    bot looks like it is working. A count that has collapsed is the only signal.
+    """
+    try:
+        from .sources.lineups import probable_lineups
+        from .sources.market_trends import trends_index
+        trends, lineups = len(trends_index() or {}), len(probable_lineups() or {})
+    except Exception as e:                       # noqa: BLE001
+        notify.send("scraper_degraded",
+                    f"No se pudieron leer las fuentes externas: {e}", level="warn")
+        return {"ok": False, "error": str(e)}
+    # LaLiga has 20 clubs and ~500 players; a working scrape returns hundreds.
+    ok = trends >= 100 and lineups >= 100
+    if not ok:
+        notify.send("scraper_degraded",
+                    f"Fuentes externas degradadas: {trends} tendencias, "
+                    f"{lineups} alineaciones probables. El bot sigue, pero con "
+                    f"menos información.", level="warn")
+    return {"ok": ok, "trends": trends, "lineups": lineups}
 
 
 def _kickoffs(client):
@@ -495,15 +655,18 @@ def handle_offers(ctx):
         return {"status": "skipped", "reason": "offer handling is off"}
 
     client = ctx.get_client()
-    lid, tid = client.default_ids()
-    team = client.team(lid, tid)
-    decisions = offers_mod.evaluate_offers(team, client.market(lid),
+    lid, _tid = league_ids(client)
+    # The squad is read from the cached reserves, not from a fresh team() call:
+    # the reserves ARE the list of our players, and a market read alone is enough
+    # to see the offers. One request per tick instead of three.
+    decisions = offers_mod.evaluate_offers(None, client.market(lid),
                                            reserves=reserves)
     if not decisions:
         return {"status": "ok", "offers": 0}
 
     accepted, declined, skipped = [], [], []
     for d in decisions:
+        d["why"] = explain.offer(d)
         if ctx.out_of_time():
             skipped.append(d)
             continue
@@ -514,8 +677,8 @@ def handle_offers(ctx):
                     continue
                 client.accept_offer(lid, d["market_id"], d["offer_id"], d["amount"])
                 events.emit("sell", f"SOLD {d['nombre']} for {d['amount']:,}",
-                            detail={"reserve": d["reserve"], "value": d["value"],
-                                    "in_xi": d["in_xi"]})
+                            detail={"why": d["why"]})
+                notify.send(f"sold:{d['player_id']}", d["why"], level="good")
                 accepted.append(d)
             elif config.DECLINE_LOWBALLS and not ctx.dry_run:
                 client.decline_offer(lid, d["market_id"], d["offer_id"])
@@ -538,14 +701,17 @@ def _plan_listings(ctx, client, lid, team, best, sells):
 
     store = get_storage()
     market = client.market(lid)
-    store.put_doc("reserves", offers_mod.reserve_map(team, best, sells))
+    days = _days_listed(store, team, market)
+    store.put_doc("reserves",
+                  offers_mod.reserve_map(team, best, sells, listed_since=days))
     if not config.AUTO_LIST or ctx.dry_run:
         return {"mode": "off" if not config.AUTO_LIST else "dry-run",
                 "listed": [], "would_list": offers_mod.plan_listings(
-                    team, market, best, sells)}
+                    team, market, best, sells, listed_since=days)}
 
     queued = []
-    for row in offers_mod.plan_listings(team, market, best, sells):
+    for row in offers_mod.plan_listings(team, market, best, sells,
+                                        listed_since=days):
         scheduler.schedule(
             scheduler.LIST_SQUAD,
             {"league_id": lid, **row},
@@ -555,7 +721,7 @@ def _plan_listings(ctx, client, lid, team, best, sells):
             idempotency_key=f"list:{lid}:{row['player_team_id']}:"
                             f"{date.today().isoformat()}",
             expires_at=utcnow() + timedelta(hours=12))
-        queued.append(row)
+        queued.append({**row, "why": explain.listing(row)})
     return {"mode": "on", "listed": queued}
 
 
@@ -575,13 +741,20 @@ def run_review(ctx, force=False):
     try:
         client = ctx.get_client()
         report = agent_mod.review(client)
-        lid, tid = client.default_ids()
+        lid, tid = league_ids(client)
         team = client.team(lid, tid)
 
         lineup_res = ({"status": "skipped", "reason": "autonomy off"}
                       if not (config.AUTO_EXECUTE and config.AUTO_LINEUP)
                       else _apply_best_lineup(ctx, client, lid, tid, team))
-        bids_res = _plan_bids(ctx, client, lid, team, report)
+        # Gaps first: an empty slot costs points every gameweek, which beats any
+        # flip margin. Whatever it commits is withheld from the flip budget so
+        # the same euros are not promised twice.
+        gaps_res = _plan_gap_signings(ctx, lid, team, report)
+        remaining = dict(team)
+        remaining["teamMoney"] = max(0, int(team.get("teamMoney") or 0)
+                                     - gaps_res.get("committed", 0))
+        bids_res = _plan_bids(ctx, client, lid, remaining, report)
         best = None
         try:
             from .strategy import lineup as lineup_opt
@@ -590,6 +763,7 @@ def run_review(ctx, force=False):
             pass          # incomplete squad: reserves fall back to squad premiums
         listings = _plan_listings(ctx, client, lid, team, best,
                                   report.get("sells"))
+        sources = _check_sources(report)
         clauses = _plan_clauses(ctx, lid, team, report)
         shield = _plan_shield(ctx, lid, report)
         matchday = _plan_matchday_lineups(ctx, client, lid, tid)
@@ -598,14 +772,16 @@ def run_review(ctx, force=False):
         store.put_doc("last_review_at", to_iso(now))
         store.put_doc("last_report",
                       _summarize(report, lineup_res, bids_res, listings,
-                                 clauses, shield))
+                                 clauses, shield, sources, gaps_res))
         events.emit("review", f"Review: balance {report['money']:,}",
                     detail={"flips": len(report.get("flips") or []),
                             "tasks": len(report.get("tasks") or []),
                             "scheduled_bids": len(bids_res.get("scheduled") or [])})
         return {"status": "ok", "money": report.get("money"),
-                "lineup": lineup_res, "bids": bids_res, "listings": listings,
+                "lineup": lineup_res, "bids": bids_res, "gaps": gaps_res,
+                "listings": listings,
                 "clauses": clauses, "shield": shield, "matchday": matchday,
+                "sources": sources,
                 "reminders_queued": reminders,
                 "tasks": len(report.get("tasks") or [])}
     finally:
@@ -613,7 +789,7 @@ def run_review(ctx, force=False):
 
 
 def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
-               shield=None):
+               shield=None, sources=None, gaps_res=None):
     """What the dashboard reads. Deliberately small: a full review payload is
     hundreds of KB of squad data and there is no reason to store it every hour."""
     lu = report.get("lineup") or {}
@@ -630,9 +806,19 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "clause_targets": (report.get("clause_targets") or [])[:5],
         "tasks": report.get("tasks") or [],
         "bids": bids_res,
+        "gap_signings": gaps_res or {},
         "listings": listings or {},
         "clauses": clauses or {},
         "shield": shield or {},
+        "sources": sources or {},
+        # Is any of this actually making money? The rivals analysis already
+        # computes our own purchases, sales and net P&L — surfacing it is the
+        # difference between trusting the bot and hoping.
+        "pnl": next(({"purchases": r.get("purchases"), "sales": r.get("sales"),
+                      "net": r.get("net_profit"),
+                      "team_value": r.get("team_value")}
+                     for r in (report.get("rivals") or []) if r.get("is_me")),
+                    None),
         "rivals": [{"position": r.get("position"),
                     "manager": r.get("manager_name"),
                     "points": r.get("points"),
@@ -712,6 +898,8 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         summary["ok"] = True
         summary["duration_seconds"] = round(time.monotonic() - started, 2)
         store.finish_execution(execution_id, DONE, summary=summary)
+        _note_health(store, ok=True)
+        _check_token_expiry(store)
         return summary
     except Exception as e:                       # noqa: BLE001
         summary.update({"ok": False, "error": f"{type(e).__name__}: {e}",
@@ -721,9 +909,62 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
             store.finish_execution(execution_id, FAILED, summary=summary,
                                    error=summary["error"])
             events.emit("error", f"Tick failed: {e}", status="error")
+            _note_health(store, ok=False, error=summary["error"])
         except Exception:
             pass
         return summary
+
+
+def _note_health(store, ok, error=None):
+    """Track consecutive failures and speak up once — then once on recovery.
+
+    One failure is a hiccup (a 500 from LaLiga, a cold start that timed out) and
+    is not worth a phone buzzing. Two in a row is a deployment that is broken and
+    will stay broken until somebody looks.
+    """
+    try:
+        streak = int(store.get_doc("fail_streak", 0) or 0)
+    except Exception:
+        return
+    if ok:
+        if streak >= 2:
+            notify.clear("tick_failed")
+            notify.send("tick_recovered", "El bot volvió a funcionar.",
+                        level="good", force=True)
+        if streak:
+            store.put_doc("fail_streak", 0)
+        return
+    streak += 1
+    store.put_doc("fail_streak", streak)
+    if streak >= 2:
+        notify.send("tick_failed",
+                    f"El bot lleva {streak} ejecuciones fallando.\n{error or ''}",
+                    level="error")
+
+
+def _check_token_expiry(store):
+    """Warn before the 90-day LaLiga refresh token runs out.
+
+    It is the one thing only a human can fix, and it expires without warning: the
+    bot simply stops being able to log in. Better to be told a week early than to
+    discover it after missing four gameweeks.
+    """
+    try:
+        from . import auth
+        tokens = store.get_doc("tokens", None)
+        if not tokens:
+            return
+        exp = auth.jwt_exp(tokens.get("refresh_token") or "")
+        if not exp:
+            return
+        days = (exp - utcnow().timestamp()) / 86400
+        if days <= config.TOKEN_WARN_DAYS:
+            notify.send("token_expiring",
+                        f"La sesión de LaLiga caduca en {days:.0f} días. "
+                        f"Hay que repetir `fantasybot login`.",
+                        level="warn" if days > 1 else "error")
+    except Exception:
+        pass
 
 
 def _sleep_hint():

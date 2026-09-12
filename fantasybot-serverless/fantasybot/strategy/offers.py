@@ -35,6 +35,13 @@ DUMP_DISCOUNT = -0.30      # out of LaLiga: his value is going to zero, take the
 # Below this, a listing is not worth the slot.
 MIN_LISTING_PRICE = 100_000
 
+# A price nobody meets is a price that is wrong. After a grace period, an unsold
+# listing gives back some of its premium each day, so the reserve walks down
+# towards what the market will actually pay — but never below market value,
+# because selling an asset at a discount is a different decision entirely.
+STALE_AFTER_DAYS = 2
+PREMIUM_DECAY_PER_DAY = 0.25   # a quarter of the ORIGINAL premium, per day
+
 ACCEPT = "accept"
 DECLINE = "decline"
 
@@ -60,12 +67,26 @@ def premium_for(player, xi_ids, sell_ids):
     return SQUAD_PREMIUM
 
 
-def reserve_price(player, xi_ids, sell_ids):
+def decayed_premium(premium, days_listed):
+    """The premium after `days_listed` days without a taker.
+
+    Only positive premiums decay. The out-of-league discount is not an asking
+    price we are being stubborn about — it is a judgement that the player is
+    losing value, and waiting should make us MORE willing to sell, not less.
+    """
+    if premium <= 0 or not days_listed or days_listed <= STALE_AFTER_DAYS:
+        return premium
+    stale_days = days_listed - STALE_AFTER_DAYS
+    return max(0.0, premium - premium * PREMIUM_DECAY_PER_DAY * stale_days)
+
+
+def reserve_price(player, xi_ids, sell_ids, days_listed=0):
     """The least we would accept — and therefore what we list him at."""
     value = _market_value(player)
     if not value:
         return 0
-    return max(0, round(value * (1 + premium_for(player, xi_ids, sell_ids))))
+    premium = decayed_premium(premium_for(player, xi_ids, sell_ids), days_listed)
+    return max(0, round(value * (1 + premium)))
 
 
 def _listed_player_ids(market):
@@ -85,7 +106,8 @@ def _listed_player_ids(market):
     return out
 
 
-def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRICE):
+def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRICE,
+                  listed_since=None):
     """Squad players that should be put on the market, and at what price.
 
     Everyone not already listed goes up, each at his own reserve. Starters
@@ -102,7 +124,8 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
         pid = str(pm.get("id"))
         if pid in already:
             continue
-        price = reserve_price(p, xi_ids, sell_ids)
+        days = (listed_since or {}).get(pid, 0)
+        price = reserve_price(p, xi_ids, sell_ids, days_listed=days)
         if price < min_price:
             continue      # not worth a listing slot
         out.append({
@@ -112,7 +135,9 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
             "nombre": pm.get("nickname") or pm.get("name"),
             "value": _market_value(p),
             "price": price,
-            "premium_pct": round(100 * premium_for(p, xi_ids, sell_ids)),
+            "premium_pct": round(100 * decayed_premium(
+                premium_for(p, xi_ids, sell_ids), days)),
+            "days_listed": days,
             "in_xi": str(p.get("playerTeamId") or pm.get("id")) in
                      {str(i) for i in xi_ids},
         })
@@ -149,7 +174,7 @@ def _offers_on(row):
     return out
 
 
-def reserve_map(team, best=None, sells=None):
+def reserve_map(team, best=None, sells=None, listed_since=None):
     """{playerMaster id: reserve price} for the whole squad.
 
     Computed once per review and cached, because working it out needs the optimal
@@ -162,7 +187,9 @@ def reserve_map(team, best=None, sells=None):
     for p in team.get("players") or []:
         pid = (p.get("playerMaster") or {}).get("id")
         if pid is not None:
-            out[str(pid)] = reserve_price(p, xi_ids, sell_ids)
+            out[str(pid)] = reserve_price(
+                p, xi_ids, sell_ids,
+                days_listed=(listed_since or {}).get(str(pid), 0))
     return out
 
 
@@ -180,16 +207,21 @@ def evaluate_offers(team, market, best=None, sells=None, reserves=None):
     xi_ids = payload_ids(best) if best else set()
     sell_ids = {s.get("player_id") for s in (sells or [])}
     squad = {str((p.get("playerMaster") or {}).get("id")): p
-             for p in team.get("players") or []}
+             for p in (team or {}).get("players") or []}
+    # With cached reserves in hand, the reserves ARE the squad: their keys are
+    # exactly our players. That lets a tick decide offers from one market read,
+    # without also fetching the full team payload every five minutes.
+    ours = set(squad) | set(reserves or {})
 
     decisions = []
     for row in market or []:
         if row.get("discr") != "marketPlayerTeam":
             continue
         pm = row.get("playerMaster") or {}
-        player = squad.get(str(pm.get("id")))
-        if player is None:
+        pid = str(pm.get("id"))
+        if pid not in ours:
             continue          # a rival's listing, not ours
+        player = squad.get(pid) or {"playerMaster": pm}
         offers = _offers_on(row)
         if not offers:
             continue

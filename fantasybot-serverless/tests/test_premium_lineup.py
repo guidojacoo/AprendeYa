@@ -78,13 +78,21 @@ class TestPremiumCoachCaptainBench(unittest.TestCase):
         best = optimize({"players": players}, prob_index={}, premium=True)
         self.assertEqual(best["payload"]["coach"], "coach_ok")
 
-    def test_captain_is_top_scored_starter_in_the_xi(self):
+    def test_captain_is_the_starter_with_the_best_form(self):
+        """The captain doubles points, so he should be whoever is SCORING most.
+
+        This used to assert "s3" while its own comment claimed s3 had the highest
+        averagePoints — it does not. In the fixture m5 averages 10 and s3 averages
+        9; s3 only won because the score was dominated by market value (10M vs
+        8M) and ignored form entirely. Now that form is in the score, the player
+        who actually scores more gets the armband.
+        """
         players = _full_squad() + [_player("coach1", 5, 3_000_000, avg=9)]
         best = optimize({"players": players}, prob_index={}, premium=True)
         captain = best["payload"]["captain"]
         self.assertIsInstance(captain, str)
         self.assertIn(captain, payload_ids(best))          # captain is in the XI
-        self.assertEqual(captain, "s3")                    # highest averagePoints (9) starter
+        self.assertEqual(captain, "m5")                    # avg 10, the squad's best
 
     def test_premium_without_coach_does_not_raise_and_omits_coach(self):
         best = optimize({"players": _full_squad()}, prob_index={}, premium=True)

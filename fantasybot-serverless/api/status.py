@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fantasybot import config, scheduler                 # noqa: E402
 from fantasybot.llm import describe as describe_llm      # noqa: E402
+from fantasybot.notify import describe as describe_notify  # noqa: E402
 from fantasybot.storage import get_storage, to_iso, utcnow  # noqa: E402
 from fantasybot.serverless.http import guarded, query    # noqa: E402
 
@@ -33,6 +34,7 @@ def _status(handler):
         "scope": config.STORAGE_SCOPE,
         "storage": store.kind,
         "llm": describe_llm(),
+        "notify": describe_notify(),
         "autonomy": {
             "execute": config.AUTO_EXECUTE,
             "lineup": config.AUTO_LINEUP,

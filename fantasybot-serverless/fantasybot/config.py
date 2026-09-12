@@ -220,6 +220,17 @@ MAX_CLAUSE = _int("FANTASYBOT_MAX_CLAUSE", 0)
 # How early (minutes) before a kickoff to re-optimise the lineup.
 LINEUP_LEAD_MINUTES = _int("FANTASYBOT_LINEUP_LEAD_MINUTES", 25)
 
+# --- notifications -----------------------------------------------------------
+# A bot you cannot see is a bot you cannot trust, and every way this one dies is
+# silent. Telegram is free, needs no server and reaches a phone in a second:
+# message @BotFather to create a bot, then @userinfobot to get your chat id.
+TELEGRAM_BOT_TOKEN = _env("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = _env("TELEGRAM_CHAT_ID")
+# Any incoming webhook (Discord, Slack) as an alternative or an addition.
+NOTIFY_WEBHOOK_URL = _env("NOTIFY_WEBHOOK_URL")
+# Warn this many days before the 90-day LaLiga refresh token expires.
+TOKEN_WARN_DAYS = _int("FANTASYBOT_TOKEN_WARN_DAYS", 7)
+
 # Bootstrap credential: lets a fresh deployment seed tokens into the database
 # without ever running the interactive login on the server.
 FANTASY_REFRESH_TOKEN = _env("FANTASY_REFRESH_TOKEN")
