@@ -73,4 +73,4 @@ def probable_lineups(slugs=None):
     if slugs is not None:
         return _build_index(slugs)
     return cache.cached("probable_lineups", CACHE_TTL,
-                        lambda: _build_index(team_slugs()))
+                        lambda: _build_index(team_slugs()), default={})

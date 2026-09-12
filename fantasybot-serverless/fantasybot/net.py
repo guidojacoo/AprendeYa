@@ -18,6 +18,35 @@ from urllib.parse import urlsplit
 
 from . import config
 
+# A wall-clock deadline for every fetch in this process.
+#
+# Scraping is polite, which means slow: a 1.2s floor between requests and a cold
+# cache can add up to more than the 60 seconds Vercel gives a function before it
+# kills it — with an HTML error page and no chance to save anything. Past the
+# deadline a fetch refuses immediately instead of starting a request it cannot
+# finish, so the caller degrades (fewer sources, worse decisions) rather than
+# the whole run dying.
+_deadline = None
+
+
+class DeadlineExceeded(TimeoutError):
+    """The run is out of time; this fetch was not attempted."""
+
+
+def set_deadline(monotonic_deadline):
+    global _deadline
+    _deadline = monotonic_deadline
+
+
+def clear_deadline():
+    global _deadline
+    _deadline = None
+
+
+def _remaining():
+    return None if _deadline is None else _deadline - time.monotonic()
+
+
 THROTTLE_HOSTS = ("futbolfantasy.com",)
 THROTTLE_SECONDS = 1.2
 _pace_lock = threading.Lock()
@@ -44,6 +73,12 @@ def get(url: str, timeout: int = 20, retries: int = 3) -> str:
     """Fetches text. On 429, waits (Retry-After or backoff) and retries."""
     delay = 2
     for attempt in range(retries + 1):
+        left = _remaining()
+        if left is not None:
+            if left <= 1:
+                raise DeadlineExceeded(f"out of time before fetching {url}")
+            # Never let one request outlive the run that wants its answer.
+            timeout = max(1, min(timeout, int(left)))
         _pace(url)
         req = urllib.request.Request(url, headers={"User-Agent": config.USER_AGENT})
         try:

@@ -70,7 +70,8 @@ def _compute_next_kickoff():
 
 def next_kickoff():
     """datetime (ISO) of the first match of the next matchday, or None."""
-    return cache.cached("next_kickoff", CACHE_TTL, _compute_next_kickoff)
+    return cache.cached("next_kickoff", CACHE_TTL, _compute_next_kickoff,
+                        default=None)
 
 
 def days_until_matchday():
@@ -142,4 +143,5 @@ def next_gameweek_kickoff():
     yet — the deadline that matters for the lineup lock and for keeping the balance >= 0.
     Mid-jornada this points at the FOLLOWING jornada, not the current one's remaining
     matches. Cached 6h. None if it can't be determined."""
-    return cache.cached("next_gameweek_kickoff", CACHE_TTL, _compute_next_gameweek_kickoff)
+    return cache.cached("next_gameweek_kickoff", CACHE_TTL,
+                        _compute_next_gameweek_kickoff, default=None)

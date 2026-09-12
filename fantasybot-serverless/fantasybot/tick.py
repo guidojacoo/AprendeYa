@@ -24,7 +24,7 @@ import traceback
 from datetime import date, timedelta
 
 from . import agent as agent_mod
-from . import bidding, config, events, explain, notify, scheduler
+from . import bidding, config, events, explain, net, notify, scheduler
 from . import execute as execute_mod
 from . import state
 from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
@@ -319,8 +319,12 @@ def _plan_bids(ctx, client, lid, team, report):
     plan = execute_mod.plan_bids(client, lid, team)
     # Nobody in the league can outbid money they do not have. The richest rival's
     # estimated cash is the real ceiling on what any auction can cost us.
-    reach = max(((r.get("cash") or 0) for r in (report.get("rivals") or [])
-                 if not r.get("is_me")), default=0)
+    rivals = report.get("rivals") or []
+    # A cash estimate built from a partially backfilled history is not a ceiling,
+    # it is a guess — and guessing LOW loses auctions. Until the history is
+    # complete the cap stands as computed.
+    reach = 0 if any(r.get("partial_history") for r in rivals) else max(
+        ((r.get("cash") or 0) for r in rivals if not r.get("is_me")), default=0)
     scheduled, skipped = [], []
     # `plan_bids` already fits the targets inside the balance, cheapest commitment
     # first; we only add the timing.
@@ -744,29 +748,50 @@ def run_review(ctx, force=False):
         lid, tid = league_ids(client)
         team = client.team(lid, tid)
 
+        # Everything past this point is time-boxed, in order of what costs most
+        # to skip. Vercel kills a function at 60 seconds with an HTML error page
+        # and no chance to clean up — so the review would rather drop its last
+        # phases and record why than be killed mid-write and leave the dashboard
+        # showing an unparseable error.
+        skipped = []
+
+        def _afford(name, margin):
+            if ctx.out_of_time(margin=margin):
+                skipped.append(name)
+                return False
+            return True
+
         lineup_res = ({"status": "skipped", "reason": "autonomy off"}
                       if not (config.AUTO_EXECUTE and config.AUTO_LINEUP)
                       else _apply_best_lineup(ctx, client, lid, tid, team))
         # Gaps first: an empty slot costs points every gameweek, which beats any
         # flip margin. Whatever it commits is withheld from the flip budget so
         # the same euros are not promised twice.
-        gaps_res = _plan_gap_signings(ctx, lid, team, report)
+        gaps_res = (_plan_gap_signings(ctx, lid, team, report)
+                    if _afford("gap_signings", 12) else {"committed": 0})
         remaining = dict(team)
         remaining["teamMoney"] = max(0, int(team.get("teamMoney") or 0)
                                      - gaps_res.get("committed", 0))
-        bids_res = _plan_bids(ctx, client, lid, remaining, report)
+        bids_res = (_plan_bids(ctx, client, lid, remaining, report)
+                    if _afford("bids", 10) else {"mode": "out of time"})
         best = None
         try:
             from .strategy import lineup as lineup_opt
             best = lineup_opt.optimize(team)
         except ValueError:
             pass          # incomplete squad: reserves fall back to squad premiums
-        listings = _plan_listings(ctx, client, lid, team, best,
-                                  report.get("sells"))
-        sources = _check_sources(report)
-        clauses = _plan_clauses(ctx, lid, team, report)
-        shield = _plan_shield(ctx, lid, report)
-        matchday = _plan_matchday_lineups(ctx, client, lid, tid)
+        listings = (_plan_listings(ctx, client, lid, team, best,
+                                   report.get("sells"))
+                    if _afford("listings", 8) else {"mode": "out of time"})
+        clauses = (_plan_clauses(ctx, lid, team, report)
+                   if _afford("clauses", 6) else {"queued": []})
+        shield = (_plan_shield(ctx, lid, report)
+                  if _afford("shield", 5) else {"queued": None})
+        matchday = (_plan_matchday_lineups(ctx, client, lid, tid)
+                    if _afford("matchday", 5) else {"queued": []})
+        # Cheapest and least urgent, so it goes last: the scrapes it reads are
+        # already warm from the review above.
+        sources = _check_sources(report) if _afford("sources", 4) else {}
         reminders = _queue_reminders(report, dry_run=ctx.dry_run)
 
         store.put_doc("last_review_at", to_iso(now))
@@ -777,11 +802,17 @@ def run_review(ctx, force=False):
                     detail={"flips": len(report.get("flips") or []),
                             "tasks": len(report.get("tasks") or []),
                             "scheduled_bids": len(bids_res.get("scheduled") or [])})
+        if skipped:
+            events.emit("note", f"Revisión acortada por tiempo: "
+                                f"{', '.join(skipped)}",
+                        detail={"elapsed": round(ctx.elapsed(), 1)},
+                        status="plan")
         return {"status": "ok", "money": report.get("money"),
                 "lineup": lineup_res, "bids": bids_res, "gaps": gaps_res,
                 "listings": listings,
                 "clauses": clauses, "shield": shield, "matchday": matchday,
-                "sources": sources,
+                "sources": sources, "skipped_for_time": skipped,
+                "elapsed": round(ctx.elapsed(), 1),
                 "reminders_queued": reminders,
                 "tasks": len(report.get("tasks") or [])}
     finally:
@@ -824,6 +855,7 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
                     "points": r.get("points"),
                     "team_value": r.get("team_value"),
                     "cash": r.get("estimated_balance"),
+                    "partial_history": r.get("partial_history"),
                     "is_me": r.get("is_me")}
                    for r in (report.get("rivals") or [])][:12],
     }
@@ -874,6 +906,12 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         # No database, no tick. Say so loudly rather than pretending to work.
         return {"ok": False, "error": f"storage unavailable: {e}", **summary}
 
+    # Every scrape in this process now shares the tick's clock. Without it a cold
+    # cache could spend the whole budget being polite to futbolfantasy and get
+    # the function killed mid-write; with it the scrapes give up and the run
+    # finishes with fewer signals, which is the right trade.
+    net.set_deadline(time.monotonic() + ctx.budget_seconds)
+
     try:
         summary["actions"] = scheduler.run_due(ctx, log=log)
 
@@ -895,6 +933,7 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         summary["next_deadline"] = to_iso(scheduler.next_deadline())
         summary["sleep_seconds"] = _sleep_hint()
         summary["pending"] = len(store.pending_actions(limit=50))
+        net.clear_deadline()
         summary["ok"] = True
         summary["duration_seconds"] = round(time.monotonic() - started, 2)
         store.finish_execution(execution_id, DONE, summary=summary)
@@ -902,6 +941,7 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         _check_token_expiry(store)
         return summary
     except Exception as e:                       # noqa: BLE001
+        net.clear_deadline()
         summary.update({"ok": False, "error": f"{type(e).__name__}: {e}",
                         "traceback": traceback.format_exc()[-1500:],
                         "duration_seconds": round(time.monotonic() - started, 2)})

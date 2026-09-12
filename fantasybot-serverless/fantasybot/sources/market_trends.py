@@ -42,7 +42,8 @@ def market_trends(html=None):
     if html is not None:
         return _parse(html)
     return cache.cached("market_trends", CACHE_TTL,
-                        lambda: _parse(net.get(config.FF_MARKET_URL)))
+                        lambda: _parse(net.get(config.FF_MARKET_URL)),
+                        default=[])
 
 
 def trends_index(players=None):

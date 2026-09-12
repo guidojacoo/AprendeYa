@@ -123,12 +123,20 @@ class FantasyClient:
     def league_teams(self, league_id):
         return self.get(self._cmp(f"/leagues/{league_id}/teams?x-lang=es"))
 
-    def league_activity(self, league_id, fetch_all=True, max_pages=100):
+    def league_activity(self, league_id, fetch_all=True, max_pages=100,
+                        start_page=0):
+        """League activity, paginated.
+
+        `start_page` lets a caller resume a backfill it could not finish. A full
+        history is ~100 requests against an unofficial API, which no serverless
+        function has time for in one go — so the review walks it a few pages at a
+        time across several runs instead of trying and being killed.
+        """
         if not fetch_all:
             res = self.get(self._cmp(f"/leagues/{league_id}/activity/0?x-lang=es"))
             return res if isinstance(res, list) else []
         all_acts = []
-        for idx in range(max_pages):
+        for idx in range(start_page, start_page + max_pages):
             try:
                 r = self.get(self._cmp(f"/leagues/{league_id}/activity/{idx}?x-lang=es"))
                 if not r or not isinstance(r, list):

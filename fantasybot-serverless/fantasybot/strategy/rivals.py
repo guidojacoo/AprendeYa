@@ -220,15 +220,29 @@ DEFAULT_INITIAL_BUDGET = 100_000_000
 def analyze_rivals(
     client,
     league_id: str,
-    initial_budget: Optional[int] = None
+    initial_budget: Optional[int] = None,
+    backfill_pages: Optional[int] = None,
+    backfill_from: int = 0,
 ) -> List[Dict[str, Any]]:
-    """Fetches teams and merges league activity into persistent history to calculate metrics."""
+    """Fetches teams and merges league activity into persistent history to calculate metrics.
+
+    `backfill_pages` bounds how much history a single call will walk. A league's
+    full activity is ~100 requests, which is fine from a laptop and fatal inside
+    a function that is killed at 60 seconds — so a serverless caller passes a
+    small number and resumes from `backfill_from` on the next run.
+    """
     teams = client.league_teams(league_id) or []
 
     # If we already have persistent history for this league, fetch page 0 (new events) to minimize requests
     existing_history = state.load_activity_history(league_id)
-    if existing_history:
+    if existing_history and not backfill_from:
         activity_live = client.league_activity(league_id, fetch_all=False) or []
+    elif backfill_pages:
+        # Only a caller that ASKED to be bounded gets the extra arguments, so the
+        # CLI path (and anything stubbing this client) keeps the original call.
+        activity_live = client.league_activity(
+            league_id, fetch_all=True, max_pages=backfill_pages,
+            start_page=backfill_from) or []
     else:
         activity_live = client.league_activity(league_id, fetch_all=True) or []
 

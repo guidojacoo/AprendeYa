@@ -13,7 +13,7 @@ notifications are built on top (see README / next steps).
 
 from datetime import date, datetime, timedelta
 
-from . import state
+from . import config, state
 from .matching import match_name, POS
 from .strategy import captain as captain_mod
 from .strategy import flip, needs as needs_mod, sell as sell_mod
@@ -309,9 +309,37 @@ def review(client, days_to_matchday=None):
     _sync_tasks(gaps, targets, sells, lineup_changed)
     state.save_reminders(reminders)
 
+    # Rival cash is derived from the league's FULL transfer history — roughly a
+    # hundred paginated requests on a fresh install. That is fine from a laptop
+    # and fatal inside a function killed at 60 seconds, which is exactly how the
+    # first serverless review died. So the history is walked a few pages per run
+    # and the cursor is remembered; until it is complete the estimates are
+    # marked partial, and callers that spend money on them (the bid capper) know
+    # to ignore them rather than act on half a picture.
+    rivals_list = []
     try:
         from .strategy import rivals as rivals_mod
-        rivals_list = rivals_mod.analyze_rivals(client, lid)
+        from .storage import get_storage
+
+        store = get_storage()
+        key = f"activity_backfill:{lid}"
+        cursor = store.get_doc(key, 0) or 0
+        pages = config.ACTIVITY_PAGES_PER_RUN
+        rivals_list = rivals_mod.analyze_rivals(
+            client, lid, backfill_pages=pages, backfill_from=cursor)
+        if cursor or not store.get_doc(f"{key}:done", False):
+            # A short page returned means we reached the end of the history.
+            got = len(state.load_activity_history(lid) or [])
+            prev = store.get_doc(f"{key}:seen", 0) or 0
+            if got <= prev:
+                store.put_doc(f"{key}:done", True)
+                store.put_doc(key, 0)
+            else:
+                store.put_doc(f"{key}:seen", got)
+                store.put_doc(key, cursor + pages)
+        partial = not store.get_doc(f"{key}:done", False)
+        for r in rivals_list:
+            r["partial_history"] = partial
     except Exception:
         rivals_list = []
 
