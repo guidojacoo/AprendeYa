@@ -109,6 +109,26 @@ jobs:
             done
           fi
 
+          # And then check the function we actually came to exercise. /api and
+          # /api/tick are separate lambdas and they are NOT always serving the
+          # same build: /api reported the pushed sha while /api/tick answered
+          # with `deploy: null`, a field that exists in that very commit. Waiting
+          # on the wrong one is how a check validates code that is not running.
+          check_tick_build() {
+            for _ in $(seq 1 10); do
+              BODY="$(call tick)"
+              TICK_SHA="$(echo "$BODY" | jq -r '.deploy // ""')"
+              case "${GITHUB_SHA}" in
+                "$TICK_SHA"*) [ -n "$TICK_SHA" ] && return 0 ;;
+              esac
+              echo "  /api/tick is still on ${TICK_SHA:-an older build}; waiting."
+              sleep 20
+            done
+            echo "::warning::/api/tick never reported ${GITHUB_SHA:0:7}." \
+                 "Everything below describes a DIFFERENT build."
+            return 1
+          }
+
           call() {
             # $1 = mode. Returns the JSON body; a transport failure yields {}.
             curl -sS --max-time 70 --retry 2 --retry-delay 3 \
@@ -129,7 +149,11 @@ jobs:
           # answers the only question a deploy raises: does it still work.
           if [ "$EVENT" = "push" ]; then FORCE=1; fi
 
-          BODY="$(call tick)"
+          if [ "$EVENT" = "push" ]; then
+            check_tick_build || true
+          else
+            BODY="$(call tick)"
+          fi
           # The database wakes the bot every minute, so a deploy check can arrive
           # while one of those ticks already holds the review lock — and then it
           # checks nothing. Wait out the lock and ask once more.
