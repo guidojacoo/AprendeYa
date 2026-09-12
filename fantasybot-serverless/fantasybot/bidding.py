@@ -36,6 +36,30 @@ DEFAULT_FINAL = 15           # seconds before close for the finish
 DEFAULT_POLL = 3             # how often, in seconds, to poll in the final minute
 
 
+# How far above the richest rival's estimated cash we still allow ourselves to
+# go. The estimate is derived from public transfer activity, not read off their
+# account, so it can be low — this margin is the price of being wrong.
+RIVAL_CASH_MARGIN = 0.10
+
+
+def cap_against_rivals(computed_cap, value, richest_rival_cash):
+    """Lower a bid cap to what the competition could actually counter.
+
+    Winning an auction by ten million when nobody in the league could have paid
+    more than eight is ten million that does not buy the next player. The cap
+    only ever comes DOWN — and never below what the listing itself requires, or
+    LaLiga rejects the bid outright ("not a valid money quantity").
+
+    An unknown or zero reach means we know nothing about the field, and the
+    computed cap stands: guessing low there loses players for no reason.
+    """
+    if not richest_rival_cash or richest_rival_cash <= 0:
+        return computed_cap
+    floor = (value or 0) + UNCONTESTED_CUSHION
+    ceiling = round(richest_rival_cash * (1 + RIVAL_CASH_MARGIN))
+    return max(floor, min(computed_cap, ceiling))
+
+
 def decide(value, other_bids, seconds_left, max_bid, final=DEFAULT_FINAL):
     """How much to bid NOW, or None to wait.
 

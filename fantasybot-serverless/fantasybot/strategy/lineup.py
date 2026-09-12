@@ -64,6 +64,13 @@ DOUBTFUL_DISCOUNT = 0.6  # a 'duda' usually plays: rank below a fit player, ABOV
 # that isn't "ok" is treated as won't-play (score 0) — conservative for unknown statuses.
 _DOUBTFUL_STATUS = ("doubtful", "duda", "warned")
 
+# Weight on THIS season's points-per-gameweek. Deliberately small beside a 0-100
+# starting probability: form breaks ties between players with similar odds of
+# playing, it does not promote someone who is not going to play. A 6 pts/gw
+# player gains 3 points here — enough to beat an equally likely 2 pts/gw
+# teammate, nowhere near enough to outrank a 90%-probable starter.
+FORM_WEIGHT = 0.5
+
 
 def player_score(player, prob_index):
     """Scores a player for the XI. Returns (score, prob, disponible, tag).
@@ -99,7 +106,11 @@ def player_score(player, prob_index):
     if doubtful:
         base *= DOUBTFUL_DISCOUNT   # risk: below a fit player of the same prob, above injured (0)
         tag = "doubtful"
-    base += (pm.get("lastSeasonPoints") or 0) * 0.001  # tiebreaker
+    if disponible:
+        # Form first, last season second. Both only for players who can actually
+        # take the field — an injured man scores nothing however well he played.
+        base += float(pm.get("averagePoints") or 0) * FORM_WEIGHT
+        base += (pm.get("lastSeasonPoints") or 0) * 0.001  # historical tiebreaker
     return base, prob, disponible, tag
 
 

@@ -127,3 +127,39 @@ class ApiErrorsDoNotWedgeTheQueue(StorageTestCase):
                 last = got[0]
         self.assertEqual(last["status"], FAILED,
                          "it must stop hammering an endpoint that keeps refusing")
+
+
+class CapAgainstRivals(StorageTestCase):
+    """Winning by ten million when nobody could have paid more than eight is ten
+    million that does not buy the next player."""
+
+    def test_it_lowers_a_generous_cap_to_the_field(self):
+        self.assertEqual(
+            bidding.cap_against_rivals(20_000_000, 10_000_000, 12_000_000),
+            13_200_000, "the richest rival's cash plus the 10% margin")
+
+    def test_it_never_raises_a_cap(self):
+        self.assertEqual(
+            bidding.cap_against_rivals(9_000_000, 8_000_000, 50_000_000),
+            9_000_000)
+
+    def test_it_never_goes_below_what_the_listing_requires(self):
+        """Bidding under the player's own value is rejected by LaLiga outright."""
+        got = bidding.cap_against_rivals(20_000_000, 10_000_000, 1_000_000)
+        self.assertEqual(got, 10_000_000 + bidding.UNCONTESTED_CUSHION)
+
+    def test_an_unknown_field_leaves_the_cap_alone(self):
+        """Guessing low when we know nothing loses players for no reason."""
+        for reach in (0, None, -5):
+            self.assertEqual(
+                bidding.cap_against_rivals(20_000_000, 10_000_000, reach),
+                20_000_000, f"reach={reach}")
+
+    def test_a_valueless_listing_falls_back_to_the_rival_ceiling(self):
+        """With no value to price a floor against, the field is all we know."""
+        self.assertEqual(bidding.cap_against_rivals(5_000_000, None, 1_000),
+                         1_100)
+
+    def test_the_floor_wins_when_the_field_is_poorer_than_the_cushion(self):
+        self.assertEqual(bidding.cap_against_rivals(5_000_000, None, 5),
+                         bidding.UNCONTESTED_CUSHION)

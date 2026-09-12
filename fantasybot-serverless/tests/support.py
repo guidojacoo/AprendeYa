@@ -14,9 +14,18 @@ import shutil
 import tempfile
 import unittest
 
+from fantasybot import state as state_mod
 from fantasybot import storage
 from fantasybot.storage import local as local_mod
 from fantasybot.storage.local import LocalStorage
+
+# `state.py` addresses its documents by legacy path constants, and the local
+# backend writes to exactly the path it is handed. Repointing only the backend's
+# STATE_DIR therefore left state.add_task() writing into the repository's real
+# .state/ — polluting the working tree and leaking tasks between tests.
+_STATE_PATHS = ("SNAPSHOT_PATH", "TASKS_PATH", "REMINDERS_PATH", "BIDS_PATH",
+                "BID_PLAN_PATH", "RIVALS_SNAPSHOT_PATH", "ACTIVITY_HISTORY_PATH",
+                "SQUAD_HISTORY_PATH", "PLAYERS_CACHE_PATH")
 
 
 class StorageTestCase(unittest.TestCase):
@@ -35,10 +44,21 @@ class StorageTestCase(unittest.TestCase):
             "pkce": f"{self.tmp}/.pkce.json",
             "run_current": f"{self.tmp}/.state/run.current",
         }
+        self._saved_state = {n: getattr(state_mod, n) for n in _STATE_PATHS}
+        self._saved_state["STATE_DIR"] = state_mod.STATE_DIR
+        self._saved_state["VALUE_HISTORY_DIR"] = state_mod.VALUE_HISTORY_DIR
+        state_mod.STATE_DIR = local_mod.STATE_DIR
+        state_mod.VALUE_HISTORY_DIR = f"{local_mod.STATE_DIR}/value_history"
+        for name in _STATE_PATHS:
+            leaf = getattr(state_mod, name).replace("\\", "/").rsplit("/", 1)[-1]
+            setattr(state_mod, name, f"{local_mod.STATE_DIR}/{leaf}")
+
         self.store = storage.set_storage(LocalStorage())
         self.addCleanup(self._restore)
 
     def _restore(self):
+        for name, value in self._saved_state.items():
+            setattr(state_mod, name, value)
         (local_mod.STATE_DIR, local_mod.CACHE_DIR,
          local_mod.EVENTS_PATH, local_mod._SPECIAL_PATHS) = self._saved
         storage.reset_storage()
