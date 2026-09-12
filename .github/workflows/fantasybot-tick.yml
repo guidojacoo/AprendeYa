@@ -32,6 +32,13 @@ on:
     # Public repo: minutes are free and unmetered. Go back to */30 (plus an
     # external cron) if it is ever made private again.
     - cron: "*/5 * * * *"
+  # Every deploy gets one tick. Not a convenience: the repair that points the
+  # database's clock at this deployment — and settles the key they authenticate
+  # with — runs INSIDE a tick, and a tick is what a broken clock cannot produce.
+  # Something outside that circle has to fire once, and a push to main is the
+  # one event that is guaranteed to happen when any of this changes.
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       force:
