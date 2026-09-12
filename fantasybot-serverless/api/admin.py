@@ -16,12 +16,12 @@ from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fantasybot import scheduler, state, tick            # noqa: E402
+from fantasybot import notify, scheduler, state, tick    # noqa: E402
 from fantasybot.storage import get_storage, to_iso       # noqa: E402
 from fantasybot.serverless.http import body, guarded, query  # noqa: E402
 
 ACTIONS = ("review", "cancel", "setting", "settings", "tasks", "complete-task",
-           "pending", "reset-cadence")
+           "pending", "reset-cadence", "test-notify")
 
 
 def _dispatch(handler):
@@ -37,6 +37,26 @@ def _dispatch(handler):
                        log=lines.append)
         res["log"] = lines[-40:]
         return (200 if res.get("ok") else 500), res
+
+    if action == "test-notify":
+        # End-to-end proof, which is the only kind worth having here: three
+        # separate things (token, chat id, and having messaged the bot first)
+        # must all be right, and getting any one wrong fails silently.
+        if not notify.enabled():
+            return 200, {"ok": False,
+                         "error": "No hay notificaciones configuradas. Falta "
+                                  "TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID (o "
+                                  "NOTIFY_WEBHOOK_URL) en Vercel.",
+                         "notify": notify.describe()}
+        res = notify.send("test", "Prueba de FantasyBot: si leés esto, los "
+                                  "avisos funcionan.", level="good", force=True)
+        if not res.get("sent"):
+            res["hint"] = ("Revisá: 1) el token completo con los dos puntos, "
+                           "2) el chat id numérico, 3) que le hayas mandado "
+                           "/start a TU bot — Telegram no deja que un bot "
+                           "escriba primero.")
+        return 200, {"ok": bool(res.get("sent")), "result": res,
+                     "notify": notify.describe()}
 
     if action == "cancel":
         key = params.get("key")

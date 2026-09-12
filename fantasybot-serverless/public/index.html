@@ -225,6 +225,7 @@
       <section><h2>Acciones</h2>
         <div class="row"><div class="m">
           <button class="primary" id="run">Forzar revisión ahora</button>
+          <button id="testnotify" style="margin-left:6px">Probar avisos</button>
           <button id="logout" style="margin-left:6px">Salir</button>
           <div class="note" id="run-note" style="margin-top:8px">
             Una revisión completa tarda 20-60s.</div>
@@ -447,6 +448,10 @@ function render(d){
     +'<div class="row"><div class="m">LLM</div><div class="right">'
     +(llm.enabled?('<span class="tag ok">'+esc(llm.model||'on')+'</span>')
                  :'<span class="tag warn">apagado</span>')+'</div></div>'
+    +'<div class="row"><div class="m">Avisos</div><div class="right">'
+    +((d.notify||{}).enabled
+        ?'<span class="tag ok">'+((d.notify||{}).telegram?'Telegram':'webhook')+'</span>'
+        :'<span class="tag warn">apagados</span>')+'</div></div>'
     +'<div class="row"><div class="m">Almacenamiento</div>'
     +'<div class="right">'+esc(d.storage||'?')+'</div></div>';
 
@@ -524,6 +529,16 @@ $('refresh').onclick=load;
 $('logout').onclick=()=>logout();
 $('auto').onclick=()=>setInterval_(
   INTERVALS[(INTERVALS.indexOf(interval)+1)%INTERVALS.length]);
+$('testnotify').onclick=async e=>{
+  const b=e.currentTarget; b.disabled=true; b.textContent='Enviando…';
+  try{
+    const r=await call('/api/admin?action=test-notify',{method:'POST'});
+    $('run-note').textContent=r.ok
+      ?'Aviso enviado. Mirá Telegram.'
+      :('No se pudo enviar: '+(r.error||'')+' '+((r.result||{}).hint||''));
+  }catch(err){$('run-note').textContent='Error: '+err.message;}
+  b.disabled=false; b.textContent='Probar avisos';
+};
 $('run').onclick=async e=>{
   const b=e.currentTarget; b.disabled=true; b.textContent='Ejecutando…';
   try{await call('/api/admin?action=review',{method:'POST'}); await load();}
