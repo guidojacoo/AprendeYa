@@ -973,6 +973,7 @@ def _note_health(store, ok, error=None):
                         level="good", force=True)
         if streak:
             store.put_doc("fail_streak", 0)
+        _note_gap(store)
         return
     streak += 1
     store.put_doc("fail_streak", streak)
@@ -980,6 +981,34 @@ def _note_health(store, ok, error=None):
         notify.send("tick_failed",
                     f"El bot lleva {streak} ejecuciones fallando.\n{error or ''}",
                     level="error")
+
+
+# GitHub disables scheduled workflows in a repository with no activity for 60
+# days. Nothing fails when that happens — the bot simply stops being woken, which
+# is invisible precisely because nothing is running to notice. The daily Vercel
+# cron is the independent witness: when it fires and finds the last tick was
+# hours rather than minutes ago, the scheduler is dead and we say so.
+SCHEDULER_GAP_ALERT = 3600
+
+
+def _note_gap(store):
+    try:
+        rows = store.recent_executions(limit=2)
+        if len(rows) < 2:
+            return
+        now, prev = parse_iso(rows[0].get("started_at")), parse_iso(
+            rows[1].get("started_at"))
+        if not (now and prev):
+            return
+        gap = (now - prev).total_seconds()
+        if gap > SCHEDULER_GAP_ALERT:
+            notify.send("scheduler_gap",
+                        f"El bot pasó {gap / 3600:.1f} h sin ejecutarse. "
+                        f"Revisá GitHub Actions: si el repo estuvo 60 días sin "
+                        f"commits, GitHub desactiva el workflow programado.",
+                        level="warn")
+    except Exception:
+        pass
 
 
 def _check_token_expiry(store):
