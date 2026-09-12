@@ -12,40 +12,26 @@
 # 214 seconds", and this job sleeps those 214 seconds on GitHub's runner — which
 # is a free, accurate clock — before calling back in sniper mode to place the bid.
 #
-# THE CRON BELOW IS A BACKUP, NOT THE PRIMARY SCHEDULER. Read this before
-# changing it.
+# VISIBILITY DECIDES THE CADENCE. This repository is public, so */5 works.
 #
-# On a PRIVATE repository GitHub bills every job rounded up to one minute, so a
-# */5 schedule is ~8,600 minutes a month against a 2,000-minute free allowance —
-# and GitHub deprioritises scheduled runs on private repos accordingly. In
-# practice a private repo on */5 does not get 288 runs a day. It gets none.
-# That is not a bug to work around; it is the platform declining to give away
-# metered compute.
+# On a PRIVATE repository GitHub bills every job rounded up to one minute — */5
+# is ~8,600 minutes a month against a 2,000-minute allowance — and it
+# deprioritises scheduled runs accordingly. A private repo on */5 does not get
+# 288 runs a day; it gets none, which is exactly what this deployment saw for
+# eighty minutes before the repo was made public. That is the platform declining
+# to give away metered compute, not a bug to work around.
 #
-# So the primary clock is an EXTERNAL cron (cron-job.org or similar, free, one
-# minute granularity) pointed at:
-#
-#     POST https://<your-app>.vercel.app/api/tick
-#     Header: Authorization: Bearer <BOT_CRON_SECRET>
-#
-# See DEPLOY.md. That service costs nothing, consumes no Actions minutes, and
-# hits the deadline more reliably than GitHub's best-effort scheduler ever did.
-#
-# What this workflow is still FOR: holding the line. A runner can sleep until a
-# deadline and wake at T-5s, which no simple URL pinger can. It runs every half
-# hour (48 runs/day = 1,440 min/month, inside the free allowance) and takes over
-# whenever a bid is close enough to sit and wait for.
-#
-# On a PUBLIC repository minutes are free and unmetered — there, "*/5" is viable
-# and this can be your only scheduler.
+# So: if this repository ever goes private again, drop the cron to */30 and put
+# an external one-minute cron (cron-job.org, free) in front of /api/tick instead.
+# DEPLOY.md has the setup.
 
 name: fantasybot tick
 
 on:
   schedule:
-    # Every 30 minutes: 48 runs/day ≈ 1,440 min/month, inside the 2,000 free
-    # minutes a PRIVATE repo gets. On a public repo you can safely use "*/5".
-    - cron: "*/30 * * * *"
+    # Public repo: minutes are free and unmetered. Go back to */30 (plus an
+    # external cron) if it is ever made private again.
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       force:
