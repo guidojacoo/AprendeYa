@@ -16,12 +16,12 @@ from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fantasybot import notify, scheduler, state, tick    # noqa: E402
+from fantasybot import notify, scheduler, selftest, state, tick  # noqa: E402
 from fantasybot.storage import get_storage, to_iso       # noqa: E402
 from fantasybot.serverless.http import body, guarded, query  # noqa: E402
 
 ACTIONS = ("review", "cancel", "setting", "settings", "tasks", "complete-task",
-           "pending", "reset-cadence", "test-notify")
+           "pending", "reset-cadence", "test-notify", "selftest")
 
 
 def _dispatch(handler):
@@ -37,6 +37,12 @@ def _dispatch(handler):
                        log=lines.append)
         res["log"] = lines[-40:]
         return (200 if res.get("ok") else 500), res
+
+    if action == "selftest":
+        # Read-only on purpose: you run a diagnosis when things are already
+        # strange, and it must not place a bid while you are looking.
+        report = selftest.run()
+        return 200, {"ok": report["ok"], **report}
 
     if action == "test-notify":
         # End-to-end proof, which is the only kind worth having here: three

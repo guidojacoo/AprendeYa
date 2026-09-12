@@ -220,6 +220,15 @@
 
     <!-- SISTEMA -->
     <div data-panel="sistema" class="hide">
+      <section><h2>Diagnóstico</h2>
+        <div class="row"><div class="m">
+          <button class="primary" id="diag">Revisar todo</button>
+          <div class="note" style="margin-top:8px">
+            Prueba cada pieza por separado: base, sesión de LaLiga, API, mercado,
+            fuentes, scheduler, LLM y avisos. No toca nada.</div>
+        </div></div>
+        <div id="diag-out"></div>
+      </section>
       <section><h2>Configuración</h2><div id="config"></div></section>
       <section><h2>Ejecuciones</h2><div id="executions"></div></section>
       <section><h2>Acciones</h2>
@@ -529,6 +538,24 @@ $('refresh').onclick=load;
 $('logout').onclick=()=>logout();
 $('auto').onclick=()=>setInterval_(
   INTERVALS[(INTERVALS.indexOf(interval)+1)%INTERVALS.length]);
+const DIAG={ok:['ok','OK'],warn:['warn','AVISO'],fail:['bad','ROTO']};
+$('diag').onclick=async e=>{
+  const b=e.currentTarget; b.disabled=true; b.textContent='Revisando…';
+  $('diag-out').innerHTML='<div class="empty">Puede tardar 30s…</div>';
+  try{
+    const r=await call('/api/admin?action=selftest',{method:'POST'});
+    const rows=(r.checks||[]).map(c=>{
+      const [cls,label]=DIAG[c.status]||['idle',c.status];
+      return '<div class="row"><span class="tag '+cls+'">'+label+'</span>'
+        +'<div class="m"><b>'+esc(c.check)+'</b><small>'+esc(c.detail)+'</small></div>'
+        +'<div class="right">'+esc(c.ms)+'ms</div></div>';
+    }).join('');
+    $('diag-out').innerHTML=(rows||'<div class="empty">Sin resultados.</div>')
+      +'<div class="row"><div class="m"><b>'+esc(r.summary||'')+'</b></div></div>';
+  }catch(err){$('diag-out').innerHTML='<div class="empty">Error: '
+    +esc(err.message)+'</div>';}
+  b.disabled=false; b.textContent='Revisar todo';
+};
 $('testnotify').onclick=async e=>{
   const b=e.currentTarget; b.disabled=true; b.textContent='Enviando…';
   try{
