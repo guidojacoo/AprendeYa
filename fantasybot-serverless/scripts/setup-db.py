@@ -25,6 +25,9 @@ MIGRATIONS = pathlib.Path(__file__).resolve().parent.parent / "supabase" / "migr
 TABLES = ["agent_state", "cache_entries", "events", "market_snapshots",
           "scheduled_actions", "executions", "locks", "settings",
           "agent_decisions"]
+# 0002 is the in-database scheduler. Optional — the bot runs fine woken by
+# anything — so a missing table here is reported, not treated as a broken schema.
+OPTIONAL_TABLES = ["scheduler_config"]
 DEFAULT_SETTINGS = {
     "review_interval": config.REVIEW_INTERVAL,
     "llm_interval": config.LLM_INTERVAL,
@@ -71,6 +74,13 @@ def main():
             detail = str(e)
             hint = "missing" if "does not exist" in detail or "PGRST205" in detail else detail[:70]
             print(f"  [MISSING] {table}  ({hint})")
+
+    for table in OPTIONAL_TABLES:
+        try:
+            store._request("GET", table, params={"select": "*", "limit": "1"})
+            print(f"  [ok]      {table}  (reloj en la base, 0002)")
+        except StorageError:
+            print(f"  [--]      {table}  (opcional: 0002_scheduler.sql no aplicado)")
 
     if missing:
         if len(missing) == len(TABLES):

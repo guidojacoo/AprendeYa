@@ -138,6 +138,29 @@ def _scheduler():
     return OK, f"Última ejecución hace {mins:.0f} min ({last.get('status')})."
 
 
+def _db_scheduler():
+    """Whether the database is waking the bot itself (migration 0002).
+
+    Worth its own line because it is the difference between depending on
+    GitHub's best-effort scheduler and owning your clock.
+    """
+    store = get_storage()
+    if store.kind != "supabase":
+        return WARN, "Sin Supabase no hay reloj en la base."
+    try:
+        rows = store._request("GET", "scheduler_config",
+                              params={"select": "app_url,enabled", "limit": "1"})
+    except Exception:
+        return WARN, ("No está aplicado 0002_scheduler.sql. El bot depende del "
+                      "cron de GitHub, que es best-effort. Aplicalo para que la "
+                      "propia base lo despierte cada minuto.")
+    if not rows:
+        return WARN, "scheduler_config existe pero está vacía."
+    if not rows[0].get("enabled"):
+        return WARN, "El reloj de la base está desactivado (enabled = false)."
+    return OK, f"La base despierta al bot cada minuto ({rows[0].get('app_url')})."
+
+
 def _llm():
     from .llm import client as llm_client
     if not llm_client.enabled():
@@ -201,6 +224,7 @@ def _run():
 
     results += [_check("Fuentes externas", _sources, optional=True),
                 _check("Scheduler", _scheduler),
+                _check("Reloj en la base", _db_scheduler, optional=True),
                 _check("LLM", _llm, optional=True),
                 _check("Avisos", _notifications, optional=True),
                 _check("Autonomía", _autonomy)]
