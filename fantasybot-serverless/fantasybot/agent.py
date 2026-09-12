@@ -158,6 +158,14 @@ def _squad_census(team, market):
                           if str((p.get("playerMaster") or {}).get("id")) in mine),
         "position_ids": sorted({repr((p.get("playerMaster") or {}).get("positionId"))
                                 for p in players}),
+        # Whether the squad payload even carries a price. Without one no reserve
+        # can be computed, so nobody is ever listed and nothing can ever sell —
+        # and that failure looks exactly like the feature being switched off.
+        "with_market_value": sum(
+            1 for p in players
+            if (p.get("playerMaster") or {}).get("marketValue")),
+        "value_sample": [repr((p.get("playerMaster") or {}).get("marketValue"))
+                         for p in players[:3]],
     }
 
 

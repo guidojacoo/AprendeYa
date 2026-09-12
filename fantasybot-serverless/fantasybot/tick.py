@@ -786,6 +786,31 @@ def handle_offers(ctx):
             "skipped": skipped, "offers": len(decisions)}
 
 
+def _listing_skips(team, market, planned):
+    """A count of the squad players NOT going up, by reason.
+
+    Deliberately counts rather than names: this is a health check on the
+    planner, not a second list of the squad.
+    """
+    from .strategy import offers as offers_mod
+
+    already = offers_mod._listed_player_ids(market)
+    going = {str(r.get("player_id")) for r in planned}
+    reasons = {}
+    for p in team.get("players") or []:
+        pid = str((p.get("playerMaster") or {}).get("id"))
+        if pid in going:
+            continue
+        if pid in already:
+            key = "ya estaba en el mercado"
+        elif not offers_mod._market_value(p):
+            key = "sin valor de mercado en la ficha"
+        else:
+            key = "reserva por debajo del mínimo"
+        reasons[key] = reasons.get(key, 0) + 1
+    return reasons
+
+
 def _store_reserves(client, lid, team, best, sells):
     """Work out what each player is worth to us, and write it down.
 
@@ -819,9 +844,15 @@ def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None):
                 "listed": [], "would_list": offers_mod.plan_listings(
                     team, market, best, sells, listed_since=days)}
 
+    planned = offers_mod.plan_listings(team, market, best, sells,
+                                       listed_since=days)
+    # Why the others were left out. "Listed 0" over a squad of fifteen with none
+    # on the market is a silent refusal, and a silent refusal is indistinguishable
+    # from a switch being off — which cost a day of guessing between the two.
+    left_out = _listing_skips(team, market, planned)
+
     queued = []
-    for row in offers_mod.plan_listings(team, market, best, sells,
-                                        listed_since=days):
+    for row in planned:
         scheduler.schedule(
             scheduler.LIST_SQUAD,
             {"league_id": lid, **row},
@@ -832,7 +863,7 @@ def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None):
                             f"{date.today().isoformat()}",
             expires_at=utcnow() + timedelta(hours=12))
         queued.append({**row, "why": explain.listing(row)})
-    return {"mode": "on", "listed": queued}
+    return {"mode": "on", "listed": queued, "left_out": left_out}
 
 
 def run_review(ctx, force=False):

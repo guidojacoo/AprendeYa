@@ -74,3 +74,32 @@ class TheReportSaysWhatItDropped(StorageTestCase):
         got = tick._summarize({"money": 1, "lineup": {}}, {}, {},
                               skipped_phases=["listings", "clauses"])
         self.assertEqual(got["skipped_phases"], ["listings", "clauses"])
+
+
+class WhyNobodyGoesUp(StorageTestCase):
+    """"Listed 0" over a squad with nobody on the market is a silent refusal,
+    and a silent refusal is indistinguishable from a switch being off."""
+
+    def _squad(self, value):
+        return {"teamMoney": 0, "players": [
+            {"playerTeamId": "pt1",
+             "playerMaster": {"id": "m1", "nickname": "Uno", "positionId": 4,
+                              "marketValue": value, "playerStatus": "ok"}}]}
+
+    def test_a_player_with_no_price_is_counted_and_named(self):
+        got = tick._listing_skips(self._squad(None), [], [])
+        self.assertEqual(got, {"sin valor de mercado en la ficha": 1})
+
+    def test_a_price_below_the_floor_is_a_different_reason(self):
+        got = tick._listing_skips(self._squad(1_000), [], [])
+        self.assertEqual(got, {"reserva por debajo del mínimo": 1})
+
+    def test_one_already_on_the_market_is_not_a_failure(self):
+        market = [{"discr": "marketPlayerTeam", "playerMaster": {"id": "m1"}}]
+        got = tick._listing_skips(self._squad(5_000_000), market, [])
+        self.assertEqual(got, {"ya estaba en el mercado": 1})
+
+    def test_a_player_going_up_is_not_counted_at_all(self):
+        got = tick._listing_skips(self._squad(5_000_000), [],
+                                  [{"player_id": "m1"}])
+        self.assertEqual(got, {})
