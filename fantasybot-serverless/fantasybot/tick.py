@@ -29,7 +29,7 @@ from . import execute as execute_mod
 from . import state
 from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
                         TickContext)
-from .storage import (DONE, FAILED, get_storage, parse_iso, to_iso,
+from .storage import (DONE, FAILED, RUNNING, get_storage, parse_iso, to_iso,
                       utcnow)
 
 REVIEW_LOCK = "review"
@@ -116,6 +116,42 @@ def _execute_bid(ctx, action):
                                 "nombre": res.get("nombre") or p.get("nombre")}
         state.save_bids(bids)
     return res
+
+
+@scheduler.executor(scheduler.WARM)
+def _execute_warm(ctx, action):
+    """Refresh the scraped caches — and nothing else.
+
+    Scraping futbolfantasy cold costs about 25 seconds, because being polite
+    means a 1.2s floor between requests. Paying that inside a review left the
+    review with nothing to decide with, and three of them ran past the 60s
+    ceiling Vercel kills functions at (one reached 191s and one is still marked
+    `running` because it was killed mid-write).
+
+    So the scraping is its own job. It gets a whole tick to itself, writes to the
+    shared Supabase cache, and every review afterwards reads that cache for free.
+    """
+    from .sources.lineups import probable_lineups
+    from .sources.market_trends import trends_index
+    from .sources import matchday
+
+    net.set_deadline(time.monotonic() + max(5.0, ctx.remaining() - 3.0))
+    got = {}
+    try:
+        for name, fn in (("trends", trends_index),
+                         ("lineups", probable_lineups),
+                         ("kickoff", matchday.next_kickoff),
+                         ("gameweek", matchday.next_gameweek_kickoff)):
+            if ctx.out_of_time(margin=4):
+                got[name] = "sin tiempo"
+                continue
+            value = fn()
+            got[name] = (len(value) if hasattr(value, "__len__")
+                         else bool(value))
+    finally:
+        net.clear_deadline()
+    get_storage().put_doc("last_warm_at", to_iso(utcnow()))
+    return {"status": "ok", "warmed": got}
 
 
 @scheduler.executor(scheduler.CLAUSE)
@@ -542,6 +578,21 @@ def _days_listed(store, team, market):
     return out
 
 
+def _schedule_warm(store):
+    """Queue the next cache refresh, if one is due."""
+    try:
+        last = parse_iso(store.get_doc("last_warm_at"))
+        if last is not None and (utcnow() - last).total_seconds() < config.WARM_INTERVAL:
+            return
+        at = utcnow()
+        scheduler.schedule(
+            scheduler.WARM, {}, execute_at=at,
+            idempotency_key=f"warm:{at.strftime('%Y%m%d%H')}",
+            expires_at=at + timedelta(hours=2))
+    except Exception:
+        pass
+
+
 def _check_sources(report):
     """Notice when a scraped source quietly stops working.
 
@@ -553,6 +604,8 @@ def _check_sources(report):
     try:
         from .sources.lineups import probable_lineups
         from .sources.market_trends import trends_index
+        # Reads only what the warm job already cached; the leash is still on, so
+        # a cold cache reports zero instead of paying 25 seconds to find out.
         trends, lineups = len(trends_index() or {}), len(probable_lineups() or {})
     except Exception as e:                       # noqa: BLE001
         notify.send("scraper_degraded",
@@ -744,7 +797,14 @@ def run_review(ctx, force=False):
         return {"status": "skipped", "reason": "another tick is reviewing"}
     try:
         client = ctx.get_client()
-        report = agent_mod.review(client)
+        # A short leash for the review's own fetching. A cold source gives up
+        # quickly and the review proceeds with one signal fewer, rather than
+        # spending the whole function on a scrape and being killed.
+        net.set_deadline(time.monotonic() + config.REVIEW_FETCH_BUDGET)
+        try:
+            report = agent_mod.review(client)
+        finally:
+            net.set_deadline(time.monotonic() + ctx.remaining())
         lid, tid = league_ids(client)
         team = client.team(lid, tid)
 
@@ -792,6 +852,7 @@ def run_review(ctx, force=False):
         # Cheapest and least urgent, so it goes last: the scrapes it reads are
         # already warm from the review above.
         sources = _check_sources(report) if _afford("sources", 4) else {}
+        _schedule_warm(store)
         reminders = _queue_reminders(report, dry_run=ctx.dry_run)
 
         store.put_doc("last_review_at", to_iso(now))
@@ -902,6 +963,7 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
                "source": source or "unknown"}
 
     try:
+        _close_stale_executions(store)
         execution_id = store.start_execution(
             f"{mode}:{source}" if source else mode)
     except Exception as e:                       # noqa: BLE001
@@ -1039,6 +1101,35 @@ def _heal_scheduler_url(store):
         return True
     except Exception:
         return False
+
+
+# An execution left `running` was killed before it could write its own ending —
+# a Vercel timeout, a runner going away. It is not in progress and never will be,
+# but it sits at the top of the dashboard looking like it is, and it skews every
+# "when did this last run" answer. Older than this, call it what it is.
+STALE_EXECUTION_SECONDS = 300
+
+
+def _close_stale_executions(store):
+    try:
+        rows = store.recent_executions(limit=10)
+    except Exception:
+        return          # the store is unreachable; the tick will say so itself
+    for row in rows:
+        try:
+            if row.get("status") != RUNNING or row.get("finished_at"):
+                continue
+            started = parse_iso(row.get("started_at"))
+            if started is None:
+                continue
+            age = (utcnow() - started).total_seconds()
+            if age > STALE_EXECUTION_SECONDS:
+                store.finish_execution(
+                    row.get("id"), FAILED,
+                    error=f"Sin final tras {age / 60:.0f} min: la función fue "
+                          f"cortada antes de poder cerrarse (timeout de Vercel).")
+        except Exception:
+            continue    # one unclosable row must not stop the rest
 
 
 def _note_gap(store):

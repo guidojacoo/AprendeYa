@@ -179,7 +179,14 @@ def self_url():
 
 # A Vercel Hobby function is killed at 60s. We stop well before that so the tick
 # always gets to write its state and close its execution row.
-TICK_BUDGET_SECONDS = _int("TICK_BUDGET_SECONDS", 45)
+TICK_BUDGET_SECONDS = _int("TICK_BUDGET_SECONDS", 40)
+# How long the REVIEW may spend fetching from slow external sources. Far smaller
+# than the tick's budget on purpose: scraping futbolfantasy cold takes ~25s, and
+# a review that spends it there has nothing left to decide with. Warming those
+# caches is its own scheduled job, which gets the whole budget to itself.
+REVIEW_FETCH_BUDGET = _int("FANTASYBOT_REVIEW_FETCH_BUDGET", 12)
+# How often to refresh the scraped sources, in seconds.
+WARM_INTERVAL = _int("FANTASYBOT_WARM_INTERVAL", 10800)   # 3h
 # Sniper ticks are allowed to hold longer (they are the ones racing a close).
 SNIPER_BUDGET_SECONDS = _int("SNIPER_BUDGET_SECONDS", 50)
 # How long a tick holds the global mutex before it is considered dead.
