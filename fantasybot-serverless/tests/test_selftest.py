@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from fantasybot import config, selftest
+from fantasybot.storage import to_iso, utcnow
 from tests.support import StorageTestCase
 
 
@@ -239,12 +240,31 @@ class DatabaseClockProbe(StorageTestCase):
         self.assertEqual(status, selftest.FAIL)
         self.assertIn("Deployment Protection", detail)
 
-    def test_a_missing_status_function_asks_for_the_migration(self):
-        status, detail = self._probe(
-            [{"app_url": "https://real.vercel.app", "enabled": True}],
-            clock=None)
-        self.assertEqual(status, selftest.WARN)
-        self.assertIn("0003", detail)
+    def test_without_the_status_function_it_judges_by_the_wakes(self):
+        """0003 is applied by hand, so it is exactly the piece that ends up
+        missing — and asking for it is not an answer to "is the clock working".
+        The ticks the database produced are, and they need nothing installed."""
+        with mock.patch.object(self.store, "recent_executions",
+                               return_value=[{"trigger": "tick:db",
+                                              "started_at": to_iso(utcnow())}]):
+            status, detail = self._probe(
+                [{"app_url": "https://real.vercel.app", "enabled": True}],
+                clock=None)
+        self.assertEqual(status, selftest.OK)
+        self.assertIn("despertó", detail)
+
+    def test_no_wakes_from_the_database_is_a_failure(self):
+        """The case this whole evening was: the job fires every minute, pg_cron
+        logs success because net.http_post only queues the request, and not one
+        call is ever accepted."""
+        with mock.patch.object(self.store, "recent_executions",
+                               return_value=[{"trigger": "tick:github",
+                                              "started_at": to_iso(utcnow())}]):
+            status, detail = self._probe(
+                [{"app_url": "https://real.vercel.app", "enabled": True}],
+                clock=None)
+        self.assertEqual(status, selftest.FAIL)
+        self.assertIn("rechazando", detail)
 
     def test_disabled_is_reported(self):
         status, _ = self._probe([{"app_url": "https://real.vercel.app",

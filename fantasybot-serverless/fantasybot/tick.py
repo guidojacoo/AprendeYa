@@ -1078,15 +1078,36 @@ def _clock_report(store, source):
     """
     if source == "db" or store.kind != "supabase":
         return None
+
+    # What the database SAYS it did comes from a function you have to install,
+    # and this deployment spent an afternoon reading a clock whose reporting half
+    # was never applied. What it actually DID is already here: every tick records
+    # who woke it. Count those first, because they need nothing installed and
+    # they are the thing that matters — a wake-up that landed beats a log line
+    # saying a request was queued.
+    report = {}
     try:
-        return (store._request("POST", "rpc/fantasybot_clock_status")
-                or {"status": "empty"})
+        rows = store.recent_executions(limit=20)
+    except Exception:                            # noqa: BLE001
+        rows = []
+    wakes = [r for r in rows
+             if str(r.get("trigger") or "").split(":")[-1] == "db"]
+    report["db_wakes_recent"] = len(wakes)
+    last = parse_iso(wakes[0].get("started_at")) if wakes else None
+    report["last_db_wake"] = to_iso(last) if last else None
+    if last:
+        report["minutes_since_db_wake"] = round(
+            (utcnow() - last).total_seconds() / 60, 1)
+
+    try:
+        report.update(store._request("POST", "rpc/fantasybot_clock_status") or {})
     except Exception as e:                       # noqa: BLE001
         # Said out loud rather than swallowed into a null. "No answer" and "the
         # answer is bad" look identical from the outside, and telling them apart
         # by redeploying twice is how an evening goes.
-        return {"status": "unavailable",
-                "error": f"{type(e).__name__}: {e}"[:200]}
+        report["status"] = "unavailable"
+        report["error"] = f"{type(e).__name__}: {e}"[:200]
+    return report
 
 
 def _heal_scheduler_url(store):

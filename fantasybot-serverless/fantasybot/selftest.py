@@ -152,6 +152,34 @@ def _scheduler():
                 f"Origen de las recientes: {mix}.")
 
 
+def _clock_by_its_wakes(url):
+    """Did the database wake the bot, judged by the ticks it produced.
+
+    pg_cron cannot tell you its calls are being refused: net.http_post queues the
+    request and reports success. The wake-ups that landed are recorded here, with
+    who sent them, so counting those says what no log on the database side can.
+    """
+    try:
+        rows = get_storage().recent_executions(limit=20)
+    except Exception:
+        rows = []
+    wakes = [r for r in rows
+             if str(r.get("trigger") or "").split(":")[-1] == "db"]
+    if not wakes:
+        return FAIL, (f"El cron de la base existe pero NINGUNA de las últimas "
+                      f"{len(rows)} ejecuciones vino de ella: sus llamadas a "
+                      f"{url} se están rechazando. (Para ver el detalle desde "
+                      f"la base, aplicá 0003_clock_status.sql.)")
+    at = parse_iso(wakes[0].get("started_at"))
+    mins = (utcnow() - at).total_seconds() / 60 if at else None
+    if mins is not None and mins > 15:
+        return WARN, (f"La base despertó al bot por última vez hace "
+                      f"{mins:.0f} min. Debería ser cada minuto.")
+    return OK, (f"La base despertó al bot hace {mins:.0f} min "
+                f"({len(wakes)} de las últimas {len(rows)} ejecuciones son "
+                f"suyas).")
+
+
 def _db_scheduler():
     """Whether the database is waking the bot itself (migration 0002).
 
@@ -207,8 +235,11 @@ def _db_scheduler():
     try:
         status = store._request("POST", "rpc/fantasybot_clock_status") or {}
     except Exception:
-        return WARN, (f"URL correcta ({url}) pero no puedo ver el estado del "
-                      f"cron. Falta aplicar 0003_clock_status.sql.")
+        # 0003 is what lets the database report on itself, and it is applied by
+        # hand — so it is exactly the piece that ends up missing. Fall back to
+        # the evidence that needs nothing installed: the ticks the database
+        # actually woke. It answers the real question better anyway.
+        return _clock_by_its_wakes(url)
     if not status.get("scheduled"):
         return FAIL, ("La tabla de configuración existe pero EL CRON NO ESTÁ "
                       "CREADO, así que nada despierta al bot desde la base. "
