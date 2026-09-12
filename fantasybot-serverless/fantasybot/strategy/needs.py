@@ -10,6 +10,7 @@ time). With several days ahead, there's no rush.
 
 from ..matching import match_name, POS
 from ..sources.lineups import probable_lineups
+from . import points as points_mod
 
 # Recommended minimum per position (1 starter + rotation/injury margin).
 MIN_SQUAD = {"POR": 2, "DEF": 5, "MED": 5, "DEL": 3}
@@ -93,14 +94,21 @@ def candidates(client, league_id, position, prob_index=None, money=None, owned=N
             "prob": prob,
             "disponible": disponible,
             "valor": pm.get("marketValue"),
+            # What he would actually add to the XI. Ranking gap signings by
+            # market value picked the most expensive man available, which is a
+            # different question from the one being asked.
+            "expected_points": points_mod.expected(pm, prob),
             "affordable": (money is None or price <= money),
             # both routes, so the caller can see what the alternative would have cost
             "clause": clause,
             "sale_price": sale,
             "expires": el.get("expirationDate"),
         })
-    # sort: available starters first, then by probability and value
-    out.sort(key=lambda c: (c["disponible"], c["prob"] or 0, c["valor"] or 0),
+    # Available first, then by the points he is expected to add — not by what he
+    # costs. Value survives only as the last tiebreak, for the players LaLiga
+    # gives no probability for at all.
+    out.sort(key=lambda c: (c["disponible"], c["expected_points"] or 0,
+                            c["prob"] or 0, c["valor"] or 0),
              reverse=True)
     return out
 

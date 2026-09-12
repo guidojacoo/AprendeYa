@@ -12,16 +12,21 @@ second opinion invented for display — a dashboard that scores a player 80 whil
 the bot declines to bid on him is a dashboard that lies.
 """
 
-# Expected return is the spine of the score: a listing that projects +20% after
-# commission lands at 90, one that projects -20% at 10. Everything else nudges.
-MARGIN_WEIGHT = 2.0
+from . import points as points_mod
+
+# The league is won on points, so points lead the score. A signing that adds two
+# expected points a week over a replacement-level starter moves it by twelve; a
+# listing projecting +10% resale moves it by ten. Both are real — the margin is
+# what funds the next signing — but only one of them is what the season is
+# scored on, and the old weighting had it the other way round.
+POINTS_WEIGHT = 6.0
+MARGIN_WEIGHT = 1.0
 BASE = 50.0
 
-# A player who does not start scores no points, however cheap he is. This is the
-# one adjustment big enough to overturn a decent margin, because it is the one
-# mistake that costs a gameweek rather than a few thousand euros.
-SURE_STARTER = 75        # probability at or above which he is simply playing
-BENCH_RISK = 40          # at or below which he is probably watching
+# What an ordinary starter gives you per gameweek. The question a signing has to
+# answer is not "does he score points" but "does he score more than whoever
+# would play instead", so the expected points are measured against this.
+REPLACEMENT_RATE = 3.0
 
 VERDICTS = ((70, "comprar"), (58, "interesante"), (45, "regular"))
 
@@ -55,18 +60,24 @@ def score(op, prob=None, money=None):
                         f"creo que va a valer "
                         f"({_money(op.get('proyeccion'))})."))
 
+    # What he is expected to SCORE, which is what the league counts. The
+    # probability lives inside this number rather than beside it: a suplente is
+    # penalised because 20% of a good rate is a bad rate, not by a separate rule
+    # that would count the same fact twice.
+    rate = points_mod.per_start({"averagePoints": op.get("avg_points"),
+                                 "points": op.get("season_points"),
+                                 "lastSeasonPoints": op.get("last_season_points")})
     if prob is not None:
-        if prob >= SURE_STARTER:
-            weighed.append((10, f"Titular casi seguro ({prob:.0f}% de "
-                                f"probabilidad)."))
-        elif prob <= BENCH_RISK:
-            weighed.append((-15, f"Riesgo de banquillo ({prob:.0f}% de "
-                                 f"probabilidad de ser titular): un suplente "
-                                 f"no puntúa."))
-        else:
-            weighed.append((0, f"Titularidad dudosa ({prob:.0f}%)."))
+        exp = prob / 100.0 * rate
+        weighed.append(((exp - REPLACEMENT_RATE) * POINTS_WEIGHT,
+                        f"Esperaría {exp:.1f} puntos por jornada de él "
+                        f"({prob:.0f}% de titularidad × {rate:.1f} puntos por "
+                        f"partido jugado); un titular corriente da "
+                        f"{REPLACEMENT_RATE:.0f}."))
     else:
-        weighed.append((0, "Sin dato de alineación probable para él."))
+        weighed.append((0, f"Sin dato de alineación probable: hace "
+                           f"{rate:.1f} puntos por partido cuando juega, pero "
+                           f"no sé si va a jugar."))
 
     tend = op.get("tendencia")
     if tend is not None and tend > 0:

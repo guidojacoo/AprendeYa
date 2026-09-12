@@ -13,7 +13,8 @@ from fantasybot.strategy import scoring
 def op(**kw):
     base = {"nombre": "Jugador", "margin_pct": 0.0, "buy_price": 5_000_000,
             "proyeccion": 5_000_000, "tendencia": None,
-            "last_season_points": 0, "pos": "DEL", "via": "SISTEMA"}
+            "last_season_points": 0, "avg_points": 0.0, "season_points": 0,
+            "pos": "DEL", "via": "SISTEMA"}
     base.update(kw)
     return base
 
@@ -27,13 +28,26 @@ class Score(unittest.TestCase):
         self.assertLess(flat, rich)
 
     def test_a_benchwarmer_is_marked_down_hard(self):
-        """A player who does not start scores no points, however cheap. It is the
-        one adjustment allowed to overturn a decent margin, because it costs a
-        gameweek rather than a few thousand euros."""
-        starter = scoring.score(op(margin_pct=10), prob=90)
-        bench = scoring.score(op(margin_pct=10), prob=15)
-        self.assertGreater(starter["score"], bench["score"] + 20)
-        self.assertTrue(any("banquillo" in r for r in bench["reasons"]))
+        """A player who does not start scores no points, however cheap — and the
+        penalty scales with how good he is, because 15% of a nine-point player
+        is a bigger loss than 15% of a two-point one."""
+        good = {"avg_points": 9.0, "season_points": 90,
+                "last_season_points": 200}
+        starter = scoring.score(op(margin_pct=10, **good), prob=90)
+        bench = scoring.score(op(margin_pct=10, **good), prob=15)
+        self.assertGreater(starter["score"], bench["score"] + 30)
+        self.assertIn("1.3 puntos", bench["headline"])
+
+    def test_points_outrank_a_bargain(self):
+        """The whole reason the score was rebuilt: the league is won on points,
+        and a flip engine ranked a cheap non-scorer above a scoring starter."""
+        scorer = scoring.score(op(margin_pct=1, avg_points=9.0,
+                                  season_points=90, last_season_points=200),
+                               prob=85)
+        bargain = scoring.score(op(margin_pct=18, avg_points=1.5,
+                                   season_points=15, last_season_points=40),
+                                prob=85)
+        self.assertGreater(scorer["score"], bargain["score"])
 
     def test_a_falling_value_is_called_what_it_is(self):
         falling = scoring.score(op(margin_pct=5, tendencia=-3))

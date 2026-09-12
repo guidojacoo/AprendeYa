@@ -9,6 +9,7 @@ body ready for `FantasyClient.update_lineup`. It does NOT apply anything by itse
 from ..matching import match_name
 from ..sources.lineups import probable_lineups
 from .captain import form as _form, pick_captain
+from . import points as points_mod
 
 # positionId -> XI line. 5 ("Entrenador"/coach) is a premium slot that is NOT one of the
 # four XI lines, so it maps to a label ("ENT") that is deliberately absent from `by_pos`:
@@ -57,23 +58,26 @@ def caliber_prior(market_value):
     return 12
 
 
-NOT_IN_XI_SCORE = 5.0  # on his team but futbolfantasy doesn't list him as a starter → ~0%
+NOT_IN_XI_PROB = 5.0   # on his team but futbolfantasy doesn't list him as a starter → ~5%
 DOUBTFUL_DISCOUNT = 0.6  # a 'duda' usually plays: rank below a fit player, ABOVE an injured one
 
 # LaLiga playerStatus values that mean "probably plays, but with risk". Everything else
 # that isn't "ok" is treated as won't-play (score 0) — conservative for unknown statuses.
 _DOUBTFUL_STATUS = ("doubtful", "duda", "warned")
 
-# Weight on THIS season's points-per-gameweek. Deliberately small beside a 0-100
-# starting probability: form breaks ties between players with similar odds of
-# playing, it does not promote someone who is not going to play. A 6 pts/gw
-# player gains 3 points here — enough to beat an equally likely 2 pts/gw
-# teammate, nowhere near enough to outrank a 90%-probable starter.
-FORM_WEIGHT = 0.5
-
 
 def player_score(player, prob_index):
-    """Scores a player for the XI. Returns (score, prob, disponible, tag).
+    """Expected points for one gameweek. Returns (score, prob, disponible, tag).
+
+    This was `probabilidad + 0.5 × media`, which on a 0-100 probability scale
+    makes scoring a rounding error: a 95%-probable player averaging 2.5 outranked
+    a 60%-probable one averaging 11, and the second scores nearly three times as
+    many points. The league is won on points, so the two halves are multiplied
+    rather than added and the score is now in the unit that matters — a number
+    that reads as "puntos esperados".
+
+    Every constant here keeps its meaning: they were always probabilities and
+    they still are. Only what happens to them afterwards changed.
 
     tag distinguishes the source of the score:
       - 'in_xi'     : futbolfantasy gives him a starting probability (strong signal).
@@ -96,22 +100,21 @@ def player_score(player, prob_index):
         disponible, doubtful = False, False
 
     if not disponible:
-        base, tag = 0.0, "out"
+        chance, tag = 0.0, "out"
     elif info is None:
-        base, tag = float(caliber_prior(pm.get("marketValue"))), "unknown"
+        chance, tag = float(caliber_prior(pm.get("marketValue"))), "unknown"
     elif prob is not None:
-        base, tag = float(prob), "in_xi"
+        chance, tag = float(prob), "in_xi"
     else:
-        base, tag = NOT_IN_XI_SCORE, "not_in_xi"
+        chance, tag = NOT_IN_XI_PROB, "not_in_xi"
     if doubtful:
-        base *= DOUBTFUL_DISCOUNT   # risk: below a fit player of the same prob, above injured (0)
+        # A doubt lowers the odds he takes the field; it says nothing about how
+        # well he plays if he does. So it discounts the probability, never the
+        # scoring rate — which is exactly where it belongs now that the two are
+        # separate quantities instead of one blended number.
+        chance *= DOUBTFUL_DISCOUNT
         tag = "doubtful"
-    if disponible:
-        # Form first, last season second. Both only for players who can actually
-        # take the field — an injured man scores nothing however well he played.
-        base += float(pm.get("averagePoints") or 0) * FORM_WEIGHT
-        base += (pm.get("lastSeasonPoints") or 0) * 0.001  # historical tiebreaker
-    return base, prob, disponible, tag
+    return (points_mod.expected(pm, chance) or 0.0), prob, disponible, tag
 
 
 def _pid(player):

@@ -98,6 +98,11 @@ def evaluate(element, index, horizon, today_iso=None):
         "margin": round(margin),
         "margin_pct": round(margin / buy_price * 100, 1) if buy_price else 0,
         "last_season_points": int(pm.get("lastSeasonPoints") or 0),
+        # Carried so the scorer can work out what he is expected to SCORE, not
+        # only what he is expected to be worth. A flip engine only ever needed
+        # the second; a team that wants to win needs the first.
+        "avg_points": float(pm.get("averagePoints") or 0),
+        "season_points": int(pm.get("points") or 0),
         "rate_dia": round(daily_rate(trend)),
         "tendencia": trend.get("tendencia"),
         "oficial_trend_pct": _official_trend_pct(pm.get("id"), today_iso),
