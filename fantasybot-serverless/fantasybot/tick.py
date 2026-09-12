@@ -360,7 +360,8 @@ def run_review(ctx, force=False):
         reminders = _queue_reminders(report, dry_run=ctx.dry_run)
 
         store.put_doc("last_review_at", to_iso(now))
-        store.put_doc("last_report", _summarize(report, lineup_res, bids_res))
+        store.put_doc("last_report",
+                      _summarize(report, lineup_res, bids_res, listings))
         events.emit("review", f"Review: balance {report['money']:,}",
                     detail={"flips": len(report.get("flips") or []),
                             "tasks": len(report.get("tasks") or []),
@@ -373,7 +374,7 @@ def run_review(ctx, force=False):
         store.release_lock(REVIEW_LOCK, holder)
 
 
-def _summarize(report, lineup_res, bids_res):
+def _summarize(report, lineup_res, bids_res, listings=None):
     """What the dashboard reads. Deliberately small: a full review payload is
     hundreds of KB of squad data and there is no reason to store it every hour."""
     lu = report.get("lineup") or {}
@@ -390,6 +391,14 @@ def _summarize(report, lineup_res, bids_res):
         "clause_targets": (report.get("clause_targets") or [])[:5],
         "tasks": report.get("tasks") or [],
         "bids": bids_res,
+        "listings": listings or {},
+        "rivals": [{"position": r.get("position"),
+                    "manager": r.get("manager_name"),
+                    "points": r.get("points"),
+                    "team_value": r.get("team_value"),
+                    "cash": r.get("estimated_balance"),
+                    "is_me": r.get("is_me")}
+                   for r in (report.get("rivals") or [])][:12],
     }
 
 

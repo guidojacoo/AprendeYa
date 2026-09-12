@@ -2,336 +2,488 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<title>FantasyBot · Panel</title>
+<meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FantasyBot">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%235e6ad2'/><text x='16' y='23' font-size='19' font-family='system-ui' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<title>FantasyBot</title>
 <style>
+  /* Light and dark are both painted explicitly — a phone in dark mode showing a
+     blinding white panel at 1am is the fastest way to stop checking it. */
   :root{
-    --page:#f6f7f9; --surface:#fff; --surface2:#fafbfc; --line:#eceef1;
-    --ink:#12131a; --ink2:#3a3d47; --muted:#6b6f7a;
+    --page:#f6f7f9; --surface:#fff; --surface2:#fafbfc; --line:#e8eaee;
+    --ink:#12131a; --ink2:#41454f; --muted:#6b6f7a;
     --brand:#5e6ad2; --brand-d:#4f59c0; --brand-bg:#eef0fc;
-    --good:#1a7f52; --good-bg:#e7f4ec; --warn:#9a6b12; --warn-bg:#f9f2e2;
+    --good:#1a7f52; --good-bg:#e7f4ec;
+    --warn:#8a5d0c; --warn-bg:#fbf1dd;
     --bad:#bd423a; --bad-bg:#fbeceb;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-    --sh:0 1px 2px rgba(18,25,50,.05),0 6px 20px -8px rgba(18,25,50,.12);
+    --sh:0 1px 2px rgba(18,25,50,.05),0 6px 20px -10px rgba(18,25,50,.15);
+    --safe-b:env(safe-area-inset-bottom,0px);
   }
-  *{box-sizing:border-box}
+  @media (prefers-color-scheme: dark){
+    :root{
+      --page:#0b0d12; --surface:#14171f; --surface2:#181c25; --line:#242935;
+      --ink:#eceef3; --ink2:#b6bcc9; --muted:#848b9b;
+      --brand:#7b86e8; --brand-d:#98a1ef; --brand-bg:#1d2140;
+      --good:#5bd39a; --good-bg:#11291f;
+      --warn:#e0b45f; --warn-bg:#2b2313;
+      --bad:#f2837a; --bad-bg:#2e1917;
+      --sh:0 1px 2px rgba(0,0,0,.3),0 6px 22px -10px rgba(0,0,0,.6);
+    }
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{-webkit-text-size-adjust:100%}
   body{margin:0;background:var(--page);color:var(--ink);
-    font:14.5px/1.55 var(--sans);-webkit-font-smoothing:antialiased;
-    padding:24px 16px 48px}
-  .wrap{max-width:960px;margin:0 auto}
-  header{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
-  .logo{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
-    background:linear-gradient(150deg,#6b76e0,#4f59c0);color:#fff;font-weight:700}
-  h1{font-size:17px;margin:0;font-weight:650;letter-spacing:-.01em}
-  .sub{color:var(--muted);font-size:12.5px}
-  .spacer{flex:1}
-  button{font:inherit;font-size:13px;font-weight:550;padding:7px 13px;border-radius:8px;
-    border:1px solid var(--line);background:var(--surface);color:var(--ink2);cursor:pointer}
-  button:hover{background:#f4f5f8}
-  button.primary{background:var(--brand);border-color:var(--brand-d);color:#fff}
-  button.primary:hover{background:var(--brand-d)}
-  button:disabled{opacity:.5;cursor:default}
-  .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));
-    margin-bottom:16px}
-  .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;
-    padding:14px 15px;box-shadow:var(--sh)}
-  .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.07em;
-    color:var(--muted);margin:0 0 8px;font-weight:650}
-  .big{font:600 21px/1.2 var(--mono);letter-spacing:-.02em}
-  .note{color:var(--muted);font-size:12.5px;margin-top:4px}
-  .pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;
-    font-size:11.5px;font-weight:600}
+    font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased;
+    padding:0 0 calc(24px + var(--safe-b))}
+  .wrap{max-width:940px;margin:0 auto;padding:0 14px}
+
+  /* ---- header ---- */
+  header{position:sticky;top:0;z-index:20;background:var(--page);
+    padding:12px 0 10px;border-bottom:1px solid var(--line);margin-bottom:14px}
+  .bar{display:flex;align-items:center;gap:10px}
+  .logo{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;
+    background:linear-gradient(150deg,#6b76e0,#4f59c0);color:#fff;font-weight:700;
+    flex:none;font-size:15px}
+  .ttl{font-size:16px;font-weight:650;letter-spacing:-.01em;line-height:1.2}
+  .sub{color:var(--muted);font-size:12px;line-height:1.35;
+    font-variant-numeric:tabular-nums}
+  .grow{flex:1;min-width:0}
+  .pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;
+    border-radius:999px;font-size:11.5px;font-weight:650;white-space:nowrap}
+  .dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
   .ok{background:var(--good-bg);color:var(--good)}
   .warn{background:var(--warn-bg);color:var(--warn)}
   .bad{background:var(--bad-bg);color:var(--bad)}
   .idle{background:var(--brand-bg);color:var(--brand-d)}
-  section{background:var(--surface);border:1px solid var(--line);border-radius:13px;
-    box-shadow:var(--sh);margin-bottom:14px;overflow:hidden}
-  section > h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;
-    color:var(--muted);margin:0;padding:12px 15px;border-bottom:1px solid var(--line);
-    font-weight:650}
-  .rows{max-height:380px;overflow:auto}
-  .row{display:flex;gap:11px;padding:9px 15px;border-bottom:1px solid #f4f5f8;
-    align-items:baseline;font-size:13.5px}
+  .live .dot{animation:pulse 2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+  button{font:inherit;font-size:13px;font-weight:550;padding:8px 12px;
+    border-radius:9px;border:1px solid var(--line);background:var(--surface);
+    color:var(--ink2);cursor:pointer;min-height:38px}
+  button:active{transform:scale(.97)}
+  button.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  button:disabled{opacity:.45}
+  .icon{padding:8px 10px;min-width:38px}
+
+  /* ---- tabs: horizontal scroll on a phone, never wrapping ---- */
+  nav{display:flex;gap:6px;margin-top:10px;overflow-x:auto;
+    scrollbar-width:none;-ms-overflow-style:none}
+  nav::-webkit-scrollbar{display:none}
+  nav button{border:0;background:transparent;color:var(--muted);padding:7px 11px;
+    border-radius:8px;white-space:nowrap;font-size:13.5px}
+  nav button.on{background:var(--brand-bg);color:var(--brand-d);font-weight:650}
+  nav .count{font:11px var(--mono);opacity:.75;margin-left:3px}
+
+  /* ---- cards ---- */
+  .kpis{display:grid;gap:10px;grid-template-columns:repeat(2,1fr);margin-bottom:12px}
+  @media(min-width:680px){.kpis{grid-template-columns:repeat(4,1fr)}}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;
+    padding:12px 13px;box-shadow:var(--sh);min-width:0}
+  .card h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--muted);margin:0 0 6px;font-weight:650}
+  .big{font:650 19px/1.2 var(--mono);letter-spacing:-.02em;
+    overflow-wrap:anywhere}
+  .big.sm{font-size:14px}
+  .note{color:var(--muted);font-size:11.5px;margin-top:4px;line-height:1.35}
+
+  section{background:var(--surface);border:1px solid var(--line);
+    border-radius:13px;box-shadow:var(--sh);margin-bottom:12px;overflow:hidden}
+  section > h2{font-size:11px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--muted);margin:0;padding:11px 13px;
+    border-bottom:1px solid var(--line);font-weight:650}
+  .row{display:flex;gap:10px;padding:10px 13px;border-bottom:1px solid var(--line);
+    align-items:baseline;font-size:14px;min-width:0}
   .row:last-child{border-bottom:0}
-  .t{font:11.5px/1.6 var(--mono);color:var(--muted);flex:none;width:126px}
-  .k{font:11px/1.6 var(--mono);flex:none;width:78px;color:var(--brand-d);font-weight:600}
-  .txt{flex:1;min-width:0}
-  .txt small{display:block;color:var(--muted);font-size:11.5px;
-    word-break:break-word;font-family:var(--mono)}
-  .empty{padding:16px 15px;color:var(--muted);font-size:13px}
-  #gate{max-width:400px;margin:12vh auto;background:var(--surface);
-    border:1px solid var(--line);border-radius:14px;padding:22px;box-shadow:var(--sh)}
-  #gate h1{margin-bottom:5px}
-  #gate input{width:100%;font:inherit;font-family:var(--mono);font-size:13px;
-    padding:9px 11px;margin:14px 0 12px;border:1px solid var(--line);border-radius:8px}
-  #gate input:focus{outline:2px solid var(--brand-bg);border-color:var(--brand)}
-  .err{color:var(--bad);font-size:12.5px;margin-top:9px;min-height:17px}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
-    color:var(--muted);padding:8px 15px;border-bottom:1px solid var(--line);font-weight:650}
-  td{padding:8px 15px;border-bottom:1px solid #f4f5f8}
+  .row .k{font:11px/1.5 var(--mono);color:var(--brand-d);font-weight:650;
+    flex:none;width:66px;overflow:hidden;text-overflow:ellipsis}
+  .row .t{font:11px/1.5 var(--mono);color:var(--muted);flex:none}
+  .row .m{flex:1;min-width:0}
+  .row .m b{font-weight:600}
+  .row small{display:block;color:var(--muted);font-size:11px;
+    font-family:var(--mono);overflow-wrap:anywhere;margin-top:2px}
+  .right{margin-left:auto;font-family:var(--mono);font-size:12.5px;
+    white-space:nowrap;flex:none}
+  .empty{padding:16px 13px;color:var(--muted);font-size:13.5px}
+
+  /* Tables scroll inside their own box; the page never scrolls sideways. */
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:420px}
+  th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--muted);padding:9px 13px;border-bottom:1px solid var(--line);
+    font-weight:650;white-space:nowrap}
+  td{padding:9px 13px;border-bottom:1px solid var(--line);white-space:nowrap}
   tr:last-child td{border-bottom:0}
-  .num{font-family:var(--mono);text-align:right;white-space:nowrap}
-  @media(max-width:560px){
-    .t{width:92px} .k{width:62px}
-    th:nth-child(3),td:nth-child(3){display:none}
-  }
+  .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .me{background:var(--brand-bg)}
+  .tag{font-size:10.5px;padding:1px 6px;border-radius:5px;font-weight:650}
+
+  /* ---- gate ---- */
+  #gate{max-width:380px;margin:14vh auto;padding:22px;background:var(--surface);
+    border:1px solid var(--line);border-radius:15px;box-shadow:var(--sh)}
+  #gate input{width:100%;font:inherit;font-family:var(--mono);font-size:16px;
+    padding:11px;margin:14px 0 10px;border:1px solid var(--line);
+    border-radius:9px;background:var(--surface2);color:var(--ink)}
+  #gate input:focus{outline:2px solid var(--brand-bg);border-color:var(--brand)}
+  #gate button{width:100%;min-height:44px}
+  .err{color:var(--bad);font-size:12.5px;margin-top:9px;min-height:17px}
+  .hide{display:none !important}
 </style>
 </head>
 <body>
 
-<div id="gate" hidden>
-  <h1>FantasyBot</h1>
-  <div class="sub">Pega el <code>BOT_CRON_SECRET</code> para abrir el panel.</div>
-  <input id="secret" type="password" placeholder="BOT_CRON_SECRET" autocomplete="off">
-  <button class="primary" id="enter" style="width:100%">Entrar</button>
+<div id="gate" class="hide">
+  <div class="bar"><div class="logo">F</div><div><div class="ttl">FantasyBot</div>
+    <div class="sub">Panel de control</div></div></div>
+  <input id="secret" type="password" inputmode="text" placeholder="BOT_CRON_SECRET"
+         autocomplete="current-password" enterkeyhint="go">
+  <button class="primary" id="enter">Entrar</button>
   <div class="err" id="gate-err"></div>
   <div class="note" style="margin-top:12px">
-    Se guarda solo en esta pestaña (<code>sessionStorage</code>) y viaja como cabecera
-    <code>Authorization</code>. Nunca se escribe en el HTML ni se envía a terceros.
+    Se guarda solo en este navegador y viaja como cabecera <code>Authorization</code>.
+    Nunca se escribe en el HTML ni se envía a terceros.
   </div>
 </div>
 
-<div class="wrap" id="app" hidden>
-  <header>
-    <div class="logo">F</div>
-    <div>
-      <h1>FantasyBot</h1>
-      <div class="sub" id="sub">cargando…</div>
+<div id="app" class="hide">
+  <header><div class="wrap">
+    <div class="bar">
+      <div class="logo">F</div>
+      <div class="grow">
+        <div class="ttl">FantasyBot</div>
+        <div class="sub" id="sub">cargando…</div>
+      </div>
+      <span class="pill idle" id="health"><i class="dot"></i><span>—</span></span>
+      <button class="icon" id="refresh" title="Actualizar">⟳</button>
     </div>
-    <div class="spacer"></div>
-    <button id="refresh">Actualizar</button>
-    <button class="primary" id="run">Forzar revisión</button>
-    <button id="logout">Salir</button>
-  </header>
+    <nav id="tabs">
+      <button data-tab="resumen" class="on">Resumen</button>
+      <button data-tab="mercado">Mercado<span class="count" id="c-mercado"></span></button>
+      <button data-tab="cola">Cola<span class="count" id="c-cola"></span></button>
+      <button data-tab="liga">Liga</button>
+      <button data-tab="eventos">Eventos</button>
+      <button data-tab="sistema">Sistema</button>
+    </nav>
+  </div></header>
 
-  <div class="grid">
-    <div class="card">
-      <h2>Estado</h2>
-      <div><span class="pill idle" id="health">—</span></div>
-      <div class="note" id="health-note">—</div>
+  <div class="wrap">
+    <!-- RESUMEN -->
+    <div data-panel="resumen">
+      <div class="kpis">
+        <div class="card"><h3>Saldo</h3><div class="big" id="money">—</div>
+          <div class="note" id="money-note">—</div></div>
+        <div class="card"><h3>Posición</h3><div class="big" id="rank">—</div>
+          <div class="note" id="rank-note">—</div></div>
+        <div class="card"><h3>Próxima acción</h3><div class="big sm" id="next">—</div>
+          <div class="note" id="next-note">—</div></div>
+        <div class="card"><h3>Última ejecución</h3><div class="big sm" id="last">—</div>
+          <div class="note" id="last-note">—</div></div>
+      </div>
+      <section><h2>Alineación</h2><div id="lineup"></div></section>
+      <section><h2>Tareas para vos</h2><div id="tasks"></div></section>
     </div>
-    <div class="card">
-      <h2>Saldo</h2>
-      <div class="big" id="money">—</div>
-      <div class="note" id="formation">—</div>
+
+    <!-- MERCADO -->
+    <div data-panel="mercado" class="hide">
+      <section><h2>Ofertas recibidas</h2><div id="offers"></div></section>
+      <section><h2>Oportunidades de compra</h2><div class="scroll" id="flips"></div></section>
+      <section><h2>Mi plantilla en venta</h2><div class="scroll" id="listings"></div></section>
     </div>
-    <div class="card">
-      <h2>Última ejecución</h2>
-      <div class="big" id="last-run" style="font-size:16px">—</div>
-      <div class="note" id="last-run-note">—</div>
+
+    <!-- COLA -->
+    <div data-panel="cola" class="hide">
+      <section><h2>Acciones programadas</h2><div id="pending"></div></section>
     </div>
-    <div class="card">
-      <h2>Próxima acción</h2>
-      <div class="big" id="next" style="font-size:16px">—</div>
-      <div class="note" id="next-note">—</div>
+
+    <!-- LIGA -->
+    <div data-panel="liga" class="hide">
+      <section><h2>Clasificación y caja estimada</h2>
+        <div class="scroll" id="rivals"></div></section>
+    </div>
+
+    <!-- EVENTOS -->
+    <div data-panel="eventos" class="hide">
+      <section><h2>Qué hizo el bot</h2><div id="events"></div></section>
+    </div>
+
+    <!-- SISTEMA -->
+    <div data-panel="sistema" class="hide">
+      <section><h2>Configuración</h2><div id="config"></div></section>
+      <section><h2>Ejecuciones</h2><div id="executions"></div></section>
+      <section><h2>Acciones</h2>
+        <div class="row"><div class="m">
+          <button class="primary" id="run">Forzar revisión ahora</button>
+          <button id="logout" style="margin-left:6px">Salir</button>
+          <div class="note" id="run-note" style="margin-top:8px">
+            Una revisión completa tarda 20-60s.</div>
+        </div></div>
+      </section>
+      <section><h2>Auto-actualización</h2>
+        <div class="row"><div class="m">
+          <span id="auto-label">cada 2 min</span>
+          <div class="note">El panel se refresca solo. Tocá para cambiar.</div>
+        </div>
+        <div class="right"><button id="auto">Cambiar</button></div></div>
+      </section>
     </div>
   </div>
-
-  <section>
-    <h2>Acciones programadas</h2>
-    <div id="pending"></div>
-  </section>
-
-  <section>
-    <h2>Plan de mercado</h2>
-    <div id="plan"></div>
-  </section>
-
-  <section>
-    <h2>Tareas pendientes</h2>
-    <div id="tasks"></div>
-  </section>
-
-  <section>
-    <h2>Eventos recientes</h2>
-    <div class="rows" id="events"></div>
-  </section>
-
-  <section>
-    <h2>Ejecuciones</h2>
-    <div id="executions"></div>
-  </section>
 </div>
 
 <script>
-const KEY = 'fantasybot.secret';
-const gate = document.getElementById('gate');
-const app  = document.getElementById('app');
-let secret = sessionStorage.getItem(KEY) || '';
-let timer = null;
+const KEY='fantasybot.secret', IKEY='fantasybot.interval', TKEY='fantasybot.tab';
+const INTERVALS=[60,120,300,600,0];
+const gate=document.getElementById('gate'), app=document.getElementById('app');
+let secret=localStorage.getItem(KEY)||'', data=null, timer=null, tickTimer=null;
+let interval=Number(localStorage.getItem(IKEY)||120), nextAt=0;
 
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
-  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const money = n => (n === null || n === undefined || n === '') ? '—'
-  : Number(n).toLocaleString('es-ES') + ' €';
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const eur=n=>(n===null||n===undefined||n==='')?'—':Number(n).toLocaleString('es-ES')+' €';
+const short=n=>{n=Number(n)||0;const a=Math.abs(n);
+  if(a>=1e6)return (n/1e6).toFixed(a>=1e7?0:1).replace('.0','')+'M';
+  if(a>=1e3)return Math.round(n/1e3)+'k';return String(n);};
 
-function when(iso){
-  if(!iso) return '—';
-  const d = new Date(iso);
-  if(isNaN(d)) return String(iso);
-  return d.toLocaleString('es-ES', {day:'2-digit', month:'2-digit',
-    hour:'2-digit', minute:'2-digit', second:'2-digit'});
+function when(iso,withDate){
+  if(!iso)return '—';
+  const d=new Date(iso); if(isNaN(d))return String(iso);
+  const o={hour:'2-digit',minute:'2-digit'};
+  const today=new Date().toDateString()===d.toDateString();
+  if(withDate||!today){o.day='2-digit';o.month='2-digit';}
+  return d.toLocaleString('es-ES',o);
 }
-function ago(iso){
-  if(!iso) return '';
-  const s = (Date.now() - new Date(iso).getTime())/1000;
-  if(isNaN(s)) return '';
-  if(s < 0) return 'en ' + rel(-s);
-  return 'hace ' + rel(s);
-}
-function rel(s){
-  if(s < 60) return Math.round(s)+'s';
-  if(s < 3600) return Math.round(s/60)+' min';
-  if(s < 86400) return Math.round(s/3600)+' h';
-  return Math.round(s/86400)+' d';
-}
+function rel(s){s=Math.abs(s);
+  if(s<60)return Math.round(s)+'s';
+  if(s<3600)return Math.round(s/60)+' min';
+  if(s<86400)return Math.round(s/3600)+' h';
+  return Math.round(s/86400)+' d';}
+function ago(iso){if(!iso)return '';
+  const s=(Date.now()-new Date(iso).getTime())/1000;
+  if(isNaN(s))return ''; return s<0?('en '+rel(s)):('hace '+rel(s));}
 
-async function call(path, opts){
-  const res = await fetch(path, Object.assign({
-    headers: {'Authorization': 'Bearer ' + secret}
-  }, opts || {}));
-  if(res.status === 401){ throw new Error('unauthorized'); }
-  return res.json();
+async function call(path,opts){
+  const r=await fetch(path,Object.assign({headers:{'Authorization':'Bearer '+secret}},opts||{}));
+  if(r.status===401)throw new Error('unauthorized');
+  return r.json();
 }
-
-function rows(el, items, render, emptyText){
-  if(!items || !items.length){
-    el.innerHTML = '<div class="empty">' + esc(emptyText) + '</div>';
-    return;
-  }
-  el.innerHTML = items.map(render).join('');
+function list(el,items,render,emptyText){
+  el.innerHTML=(items&&items.length)?items.map(render).join('')
+    :'<div class="empty">'+esc(emptyText)+'</div>';
 }
 
+/* ---------- render ---------- */
 function render(d){
-  const last = d.last_execution || {};
-  const failed = last.status === 'failed' || (last.summary && last.summary.ok === false);
-  const stale = last.started_at &&
-    (Date.now() - new Date(last.started_at).getTime()) > 20*60*1000;
+  data=d;
+  const last=d.last_execution||{}, rep=d.report||{}, s=last.summary||{};
+  const failed=last.status==='failed'||s.ok===false;
+  const stale=last.started_at&&(Date.now()-new Date(last.started_at).getTime())>25*60*1000;
 
-  const health = document.getElementById('health');
-  health.className = 'pill ' + (failed ? 'bad' : stale ? 'warn' : last.started_at ? 'ok' : 'idle');
-  health.textContent = failed ? 'con errores' : stale ? 'sin señal' :
-    last.started_at ? 'activo' : 'sin ejecuciones';
-  document.getElementById('health-note').textContent =
-    (d.storage || '?') + ' · LLM ' + (d.llm && d.llm.enabled ? (d.llm.model||'on') : 'off') +
-    ' · scope ' + (d.scope || 'default');
+  const h=$('health');
+  h.className='pill live '+(failed?'bad':stale?'warn':last.started_at?'ok':'idle');
+  h.lastElementChild.textContent=failed?'error':stale?'sin señal':last.started_at?'activo':'sin datos';
 
-  const rep = d.report || {};
-  document.getElementById('money').textContent = money(rep.money);
-  const f = rep.formation;
-  document.getElementById('formation').textContent = f
-    ? ('Alineación ' + f.join('-') + (rep.lineup_changed ? ' · cambiada' : ' · ya óptima'))
-    : 'Sin datos de alineación todavía';
+  $('sub').textContent=when(d.now)+' · '+(d.pending_actions||[]).length+' en cola';
 
-  document.getElementById('last-run').textContent = when(last.started_at);
-  document.getElementById('last-run-note').textContent = last.started_at
-    ? (ago(last.started_at) + ' · ' + (last.trigger||'?') + ' · ' + (last.status||'?'))
-    : 'El scheduler aún no ha llamado a /api/tick';
+  /* KPIs */
+  $('money').textContent=eur(rep.money);
+  const md=rep.matchday||{};
+  $('money-note').textContent=md.days!=null
+    ? ('jornada en '+Number(md.days).toFixed(1)+' días'):'—';
 
-  document.getElementById('next').textContent = when(d.next_deadline);
-  document.getElementById('next-note').textContent = d.next_deadline
-    ? ago(d.next_deadline) : 'Nada en cola';
+  const me=(rep.rivals||[]).find(r=>r.is_me);
+  $('rank').textContent=me?('#'+me.position):'—';
+  $('rank-note').textContent=me?((me.points??'?')+' pts · '+(rep.rivals||[]).length+' equipos'):'sin datos de liga';
 
-  document.getElementById('sub').textContent =
-    'Actualizado ' + when(d.now) + ' · ' + (d.pending_actions||[]).length + ' en cola';
+  $('next').textContent=when(d.next_deadline,true);
+  $('next-note').textContent=d.next_deadline?ago(d.next_deadline):'nada en cola';
+  $('last').textContent=when(last.started_at,true);
+  $('last-note').textContent=last.started_at
+    ?(ago(last.started_at)+' · '+(s.duration_seconds??'?')+'s'):'el scheduler no llamó aún';
 
-  rows(document.getElementById('pending'), d.pending_actions, a => {
-    const p = a.payload || {};
-    return '<div class="row"><div class="t">' + esc(when(a.execute_at)) + '</div>' +
-      '<div class="k">' + esc(a.type) + '</div><div class="txt">' +
-      esc(p.nombre || p.message || p.market_id || a.idempotency_key) +
-      (p.max_bid ? ' · tope ' + money(p.max_bid) : '') +
-      '<small>' + esc(a.status) + ' · ' + esc(a.idempotency_key) + '</small></div></div>';
-  }, 'No hay acciones programadas.');
+  /* alineación */
+  const f=rep.formation, lr=rep.lineup_result||{};
+  $('lineup').innerHTML=f
+    ?('<div class="row"><div class="m"><b>'+f.join('-')+'</b>'
+      +'<small>'+esc(rep.lineup_changed?'cambiada en la última revisión':'ya era la óptima')
+      +(lr.incomplete?' · ⚠ incompleta':'')+'</small></div></div>')
+    :'<div class="empty">Todavía sin datos de alineación.</div>';
 
-  const flips = rep.flips || [];
-  const planEl = document.getElementById('plan');
-  if(!flips.length){
-    planEl.innerHTML = '<div class="empty">Sin oportunidades de flip en la última revisión.</div>';
-  } else {
-    planEl.innerHTML = '<table><thead><tr><th>Jugador</th><th>Vía</th><th>Cierra</th>' +
-      '<th class="num">Compra</th><th class="num">Margen</th></tr></thead><tbody>' +
-      flips.map(o => '<tr><td>' + esc(o.nombre) + '</td><td>' + esc(o.via) + '</td>' +
-        '<td>' + esc(when(o.expires_at)) + '</td>' +
-        '<td class="num">' + money(o.buy_price) + '</td>' +
-        '<td class="num">' + esc(o.margin_pct) + '%</td></tr>').join('') +
-      '</tbody></table>';
-  }
+  list($('tasks'),rep.tasks,t=>
+    '<div class="row"><div class="k">#'+esc(t.id)+'</div><div class="m">'+esc(t.text)
+    +(t.due?'<small>antes de '+esc(when(t.due,true))+'</small>':'')+'</div></div>',
+    'Nada pendiente de tu parte.');
 
-  rows(document.getElementById('tasks'), rep.tasks, t =>
-    '<div class="row"><div class="k">#' + esc(t.id) + '</div><div class="txt">' +
-    esc(t.text) + (t.due ? '<small>antes de ' + esc(when(t.due)) + '</small>' : '') +
-    '</div></div>', 'Sin tareas pendientes.');
+  /* ---- mercado ---- */
+  const off=d.offers||{};
+  const rows=[...(off.accepted||[]).map(o=>[o,'ok','VENDIDO']),
+              ...(off.declined||[]).map(o=>[o,'bad','rechazada']),
+              ...(off.skipped||[]).map(o=>[o,'warn','en espera'])];
+  list($('offers'),rows,([o,cls,label])=>
+    '<div class="row"><span class="tag '+cls+'">'+label+'</span><div class="m"><b>'
+    +esc(o.nombre)+'</b><small>'+esc(o.reason||'')+(o.in_xi?' · titular':'')
+    +'</small></div><div class="right">'+esc(short(o.amount))+'</div></div>',
+    off.status==='skipped'?('Sin evaluar: '+esc(off.reason||'')):'Nadie ofertó todavía.');
+  $('c-mercado').textContent=rows.length?rows.length:'';
 
-  rows(document.getElementById('events'), d.events, e =>
-    '<div class="row"><div class="t">' + esc(when(e.iso)) + '</div>' +
-    '<div class="k">' + esc(e.kind) + '</div><div class="txt">' + esc(e.title) +
-    (e.detail ? '<small>' + esc(typeof e.detail === 'string' ? e.detail
-      : JSON.stringify(e.detail)) + '</small>' : '') + '</div></div>',
-    'Todavía no hay eventos.');
+  const flips=rep.flips||[];
+  $('flips').innerHTML=flips.length
+    ?('<table><thead><tr><th>Jugador</th><th>Vía</th><th class="num">Compra</th>'
+      +'<th class="num">Margen</th><th>Cierra</th></tr></thead><tbody>'
+      +flips.map(o=>'<tr><td>'+esc(o.nombre)+'</td><td>'+esc(o.via)+'</td>'
+        +'<td class="num">'+esc(short(o.buy_price))+'</td>'
+        +'<td class="num">'+esc(o.margin_pct)+'%</td>'
+        +'<td>'+esc(when(o.expires_at,true))+'</td></tr>').join('')+'</tbody></table>')
+    :'<div class="empty">Sin oportunidades rentables ahora mismo.</div>';
 
-  rows(document.getElementById('executions'), d.executions, x => {
-    const s = x.summary || {};
-    const bits = [];
-    if(s.actions) bits.push(s.actions.length + ' acciones');
-    if(s.review && s.review.status) bits.push('review: ' + s.review.status);
-    if(s.duration_seconds !== undefined) bits.push(s.duration_seconds + 's');
-    return '<div class="row"><div class="t">' + esc(when(x.started_at)) + '</div>' +
-      '<div class="k">' + esc(x.trigger||'?') + '</div><div class="txt">' +
-      esc(x.status) + (bits.length ? ' · ' + esc(bits.join(' · ')) : '') +
-      (x.error ? '<small>' + esc(x.error) + '</small>' : '') + '</div></div>';
-  }, 'Sin ejecuciones registradas.');
+  const li=(rep.listings||{}), lrows=li.listed||li.would_list||[];
+  $('listings').innerHTML=lrows.length
+    ?('<table><thead><tr><th>Jugador</th><th class="num">Valor</th>'
+      +'<th class="num">Reserva</th><th class="num">+%</th></tr></thead><tbody>'
+      +lrows.map(r=>'<tr><td>'+esc(r.nombre)+(r.in_xi?' <span class="tag idle">XI</span>':'')
+        +'</td><td class="num">'+esc(short(r.value))+'</td>'
+        +'<td class="num">'+esc(short(r.price))+'</td>'
+        +'<td class="num">+'+esc(r.premium_pct)+'%</td></tr>').join('')+'</tbody></table>')
+    :'<div class="empty">Sin listados nuevos — la plantilla ya está en el mercado.</div>';
+
+  /* ---- cola ---- */
+  const pend=d.pending_actions||[];
+  $('c-cola').textContent=pend.length?pend.length:'';
+  list($('pending'),pend,a=>{
+    const p=a.payload||{};
+    return '<div class="row"><div class="t">'+esc(when(a.execute_at,true))+'</div>'
+      +'<div class="m"><b>'+esc(a.type)+'</b> '
+      +esc(p.nombre||p.message||p.market_id||'')
+      +(p.max_bid?' <span class="tag idle">tope '+esc(short(p.max_bid))+'</span>':'')
+      +'<small>'+esc(a.status)+' · '+esc(ago(a.execute_at))+'</small></div></div>';
+  },'No hay nada programado.');
+
+  /* ---- liga ---- */
+  const rv=rep.rivals||[];
+  $('rivals').innerHTML=rv.length
+    ?('<table><thead><tr><th>#</th><th>Mánager</th><th class="num">Pts</th>'
+      +'<th class="num">Valor</th><th class="num">Caja est.</th></tr></thead><tbody>'
+      +rv.map(r=>'<tr'+(r.is_me?' class="me"':'')+'><td>'+esc(r.position)+'</td>'
+        +'<td>'+esc(r.manager||'?')+(r.is_me?' <span class="tag idle">vos</span>':'')+'</td>'
+        +'<td class="num">'+esc(r.points??'—')+'</td>'
+        +'<td class="num">'+esc(short(r.team_value))+'</td>'
+        +'<td class="num">~'+esc(short(r.cash))+'</td></tr>').join('')+'</tbody></table>')
+    :'<div class="empty">Sin análisis de rivales todavía.</div>';
+
+  /* ---- eventos ---- */
+  list($('events'),d.events,e=>
+    '<div class="row"><div class="t">'+esc(when(e.iso,true))+'</div>'
+    +'<div class="m"><b>'+esc(e.kind)+'</b> '+esc(e.title)
+    +(e.detail?'<small>'+esc(typeof e.detail==='string'?e.detail:JSON.stringify(e.detail))+'</small>':'')
+    +'</div></div>','Todavía sin eventos.');
+
+  /* ---- sistema ---- */
+  const a=d.autonomy||{}, llm=d.llm||{};
+  const flag=(k,v)=>'<div class="row"><div class="m">'+esc(k)+'</div><div class="right">'
+    +'<span class="tag '+(v?'ok':'warn')+'">'+(v?'sí':'no')+'</span></div></div>';
+  $('config').innerHTML=
+    flag('Ejecuta acciones',a.execute)+flag('Alineación automática',a.lineup)
+    +flag('Pujas automáticas',a.bids)+flag('Vende con oferta buena',a.sells)
+    +flag('Paga cláusulas',a.clauses)
+    +'<div class="row"><div class="m">LLM</div><div class="right">'
+    +(llm.enabled?('<span class="tag ok">'+esc(llm.model||'on')+'</span>')
+                 :'<span class="tag warn">apagado</span>')+'</div></div>'
+    +'<div class="row"><div class="m">Almacenamiento</div>'
+    +'<div class="right">'+esc(d.storage||'?')+'</div></div>';
+
+  list($('executions'),d.executions,x=>{
+    const sm=x.summary||{}, bits=[];
+    if(sm.actions)bits.push(sm.actions.length+' acciones');
+    if(sm.review&&sm.review.status)bits.push('review '+sm.review.status);
+    if(sm.duration_seconds!==undefined)bits.push(sm.duration_seconds+'s');
+    return '<div class="row"><div class="t">'+esc(when(x.started_at,true))+'</div>'
+      +'<div class="m"><b>'+esc(x.status)+'</b> '+esc(bits.join(' · '))
+      +(x.error?'<small>'+esc(x.error)+'</small>':'')+'</div></div>';
+  },'Sin ejecuciones registradas.');
+}
+
+/* ---------- auto refresh ---------- */
+function setInterval_(sec){
+  interval=sec; localStorage.setItem(IKEY,sec);
+  $('auto-label').textContent=sec?('cada '+rel(sec)):'manual';
+  clearTimeout(timer);
+  if(sec){nextAt=Date.now()+sec*1000; timer=setTimeout(load,sec*1000);}
+  else nextAt=0;
+}
+function countdown(){
+  if(!data)return;
+  const base=$('sub').textContent.split(' · ⟳')[0];
+  if(nextAt){const left=Math.max(0,(nextAt-Date.now())/1000);
+    $('sub').textContent=base+' · ⟳ '+rel(left);}
 }
 
 async function load(){
   try{
-    const d = await call('/api/status?events=60');
-    if(d.ok === false) throw new Error(d.error || 'error');
+    const d=await call('/api/status?events=60');
+    if(d.ok===false)throw new Error(d.error||'error');
     render(d);
   }catch(err){
-    if(String(err.message) === 'unauthorized'){ return logout('Secreto incorrecto.'); }
-    document.getElementById('sub').textContent = 'Error: ' + err.message;
+    if(String(err.message)==='unauthorized')return logout('Secreto incorrecto.');
+    $('sub').textContent='Error: '+err.message;
   }
+  if(interval){nextAt=Date.now()+interval*1000;
+    clearTimeout(timer); timer=setTimeout(load,interval*1000);}
 }
 
+/* ---------- tabs ---------- */
+function showTab(name){
+  document.querySelectorAll('#tabs button').forEach(b=>
+    b.classList.toggle('on',b.dataset.tab===name));
+  document.querySelectorAll('[data-panel]').forEach(p=>
+    p.classList.toggle('hide',p.dataset.panel!==name));
+  localStorage.setItem(TKEY,name);
+  window.scrollTo({top:0});
+}
+document.getElementById('tabs').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(b)showTab(b.dataset.tab);
+});
+
+/* ---------- session ---------- */
 function start(){
-  gate.hidden = true; app.hidden = false;
-  load();
-  clearInterval(timer);
-  timer = setInterval(load, 20000);
+  gate.classList.add('hide'); app.classList.remove('hide');
+  showTab(localStorage.getItem(TKEY)||'resumen');
+  setInterval_(interval); load();
+  clearInterval(tickTimer); tickTimer=setInterval(countdown,1000);
 }
-
 function logout(msg){
-  clearInterval(timer);
-  sessionStorage.removeItem(KEY); secret = '';
-  app.hidden = true; gate.hidden = false;
-  document.getElementById('gate-err').textContent = msg || '';
+  clearTimeout(timer); clearInterval(tickTimer);
+  localStorage.removeItem(KEY); secret='';
+  app.classList.add('hide'); gate.classList.remove('hide');
+  $('gate-err').textContent=msg||'';
 }
-
-document.getElementById('enter').onclick = () => {
-  secret = document.getElementById('secret').value.trim();
-  if(!secret) return;
-  sessionStorage.setItem(KEY, secret);
-  document.getElementById('gate-err').textContent = '';
-  start();
+$('enter').onclick=()=>{
+  secret=$('secret').value.trim(); if(!secret)return;
+  localStorage.setItem(KEY,secret); $('gate-err').textContent=''; start();
 };
-document.getElementById('secret').addEventListener('keydown',
-  e => { if(e.key === 'Enter') document.getElementById('enter').click(); });
-document.getElementById('refresh').onclick = load;
-document.getElementById('logout').onclick = () => logout();
-document.getElementById('run').onclick = async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true; btn.textContent = 'Ejecutando…';
-  try{ await call('/api/admin?action=review', {method:'POST'}); await load(); }
-  catch(err){ document.getElementById('sub').textContent = 'Error: ' + err.message; }
-  btn.disabled = false; btn.textContent = 'Forzar revisión';
+$('secret').addEventListener('keydown',e=>{if(e.key==='Enter')$('enter').click();});
+$('refresh').onclick=load;
+$('logout').onclick=()=>logout();
+$('auto').onclick=()=>setInterval_(
+  INTERVALS[(INTERVALS.indexOf(interval)+1)%INTERVALS.length]);
+$('run').onclick=async e=>{
+  const b=e.currentTarget; b.disabled=true; b.textContent='Ejecutando…';
+  try{await call('/api/admin?action=review',{method:'POST'}); await load();}
+  catch(err){$('run-note').textContent='Error: '+err.message;}
+  b.disabled=false; b.textContent='Forzar revisión ahora';
 };
+/* A phone that comes back from sleep should show fresh data, not whatever was
+   on screen twenty minutes ago. */
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden&&secret&&!app.classList.contains('hide'))load();
+});
 
-if(secret) start(); else gate.hidden = false;
+if(secret)start(); else gate.classList.remove('hide');
 </script>
 </body>
 </html>
