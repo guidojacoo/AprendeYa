@@ -424,7 +424,10 @@ def review(client, days_to_matchday=None):
 
     result = {
         "events": events,
-        "money": team["teamMoney"],
+        # Coerced once, here, where the payload is read. Every consumer
+        # downstream formats it, compares it or subtracts from it, and the raw
+        # field is a string: `f"{money:,}"` raises on one, silently.
+        "money": num(team["teamMoney"]),
         "matchday": {"kickoff": kickoff, "days": days_to_matchday},
         "lineup": lineup_section,
         "flips": flips,

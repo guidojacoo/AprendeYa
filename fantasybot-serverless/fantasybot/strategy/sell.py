@@ -47,13 +47,14 @@ DEAD_CAPITAL_RATE = 3.0
 
 def squad_value(team) -> int:
     """Sum of marketValue across the whole squad — the scale `is_low_cash` judges against."""
-    return sum((p["playerMaster"].get("marketValue") or 0) for p in team["players"])
+    return sum(num(p["playerMaster"].get("marketValue"))
+               for p in team["players"])
 
 
 def is_low_cash(team) -> bool:
     """True when cash-on-hand is thin — outright NEGATIVE always counts (regardless of
     squad value), or thin relative to the squad's own value otherwise."""
-    money = team.get("teamMoney") or 0
+    money = num(team.get("teamMoney"))
     if money < 0:
         return True
     value = squad_value(team)

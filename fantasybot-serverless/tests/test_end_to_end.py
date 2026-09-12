@@ -19,9 +19,22 @@ from tests.support import StorageTestCase
 
 
 def _pm(pid, pos, value, avg=5, status="ok", name=None):
+    """A player exactly as LaLiga hands him over — numbers as STRINGS.
+
+    This fake used to speak in ints, and that is why the whole suite stayed green
+    through an evening in which production could not price a single player. The
+    API sends positionId "4" and marketValue "2683751" in the same payload;
+    `round(value * 1.15)` on a string raises, `{1: "POR"}.get("1")` is None, and
+    `max("2683751", 0)` refuses to compare. Each of those took out a different
+    part of the bot, and none of them could happen against a fake that made the
+    types convenient.
+
+    A test double that is easier to satisfy than the real thing is not a test.
+    """
     return {"id": pid, "nickname": name or pid, "name": name or pid,
-            "positionId": pos, "marketValue": value, "playerStatus": status,
-            "averagePoints": avg, "lastSeasonPoints": 80, "points": 40}
+            "positionId": str(pos), "marketValue": str(value),
+            "playerStatus": status, "averagePoints": str(avg),
+            "lastSeasonPoints": "80", "points": "40"}
 
 
 class FakeLaLiga:
@@ -37,7 +50,7 @@ class FakeLaLiga:
         squad += [(f"d{i}", 2, 6_000_000) for i in range(1, 6)]
         squad += [(f"m{i}", 3, 7_000_000) for i in range(1, 6)]
         squad += [(f"s{i}", 4, 9_000_000) for i in range(1, 4)]
-        self.players = [{"playerTeamId": f"pt-{p}", "buyoutClause": v * 2,
+        self.players = [{"playerTeamId": f"pt-{p}", "buyoutClause": str(v * 2),
                          "playerMaster": _pm(p, pos, v)}
                         for p, pos, v in squad]
 
@@ -52,11 +65,12 @@ class FakeLaLiga:
         return "L1", "T1"
 
     def team(self, lid, tid):
-        return {"teamMoney": self.money, "players": self.players}
+        # The balance is a string too, and it is compared against prices.
+        return {"teamMoney": str(self.money), "players": self.players}
 
     def league_teams(self, lid):
         return [{"manager": {"managerName": "Tester", "id": "u1"},
-                 "teamMoney": self.money, "players": self.players}]
+                 "teamMoney": str(self.money), "players": self.players}]
 
     def league_activity(self, lid, fetch_all=True, max_pages=100, start_page=0):
         return []
@@ -260,3 +274,29 @@ class WhenTheWorldIsBroken(_Tick):
         self.assertEqual(client.calls["sell"], [])
         self.assertEqual(client.calls["clause"], [])
         self.assertEqual(client.calls["lineup"], [])
+
+
+class TheDoubleMustBeAsAwkwardAsTheRealThing(StorageTestCase):
+    """A fake that makes the types convenient is not a test.
+
+    This suite stayed green through an evening in which production could not
+    price a single player, because `_pm` handed out ints and LaLiga hands out
+    strings. Pinning it here so nobody tidies the strings away later and takes
+    the coverage with them.
+    """
+
+    def test_the_squad_payload_speaks_in_strings(self):
+        client = FakeLaLiga()
+        pm = client.players[0]["playerMaster"]
+        for field in ("positionId", "marketValue", "averagePoints",
+                      "lastSeasonPoints", "points"):
+            self.assertIsInstance(pm[field], str, field)
+        self.assertIsInstance(client.players[0]["buyoutClause"], str)
+        self.assertIsInstance(client.team("L1", "T1")["teamMoney"], str)
+
+    def test_and_the_bot_still_prices_everyone(self):
+        from fantasybot.strategy import offers
+        client = FakeLaLiga()
+        rows = offers.plan_listings(client.team("L1", "T1"), [], None, [])
+        self.assertEqual(len(rows), len(client.players))
+        self.assertTrue(all(r["price"] > 0 for r in rows))
