@@ -609,8 +609,10 @@ function render(d){
     +'<span class="tag '+(v?'ok':'warn')+'">'+(v?'sí':'no')+'</span></div></div>';
   $('config').innerHTML=
     flag('Ejecuta acciones',a.execute)+flag('Alineación automática',a.lineup)
+    +flag('Pone la plantilla en venta',a.list)
     +flag('Pujas automáticas',a.bids)+flag('Vende con oferta buena',a.sells)
-    +flag('Paga cláusulas',a.clauses)
+    +flag('Paga cláusulas',a.clauses)+flag('Blinda jugadores',a.shield)
+    +flag('Realinea antes de cada partido',a.matchday)
     +'<div class="row"><div class="m">LLM</div><div class="right">'
     +(llm.enabled?('<span class="tag ok">'+esc(llm.model||'on')+'</span>')
                  :'<span class="tag warn">apagado</span>')+'</div></div>'

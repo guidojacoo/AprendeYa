@@ -41,6 +41,12 @@ def _status(handler):
             "bids": config.AUTO_BIDS,
             "clauses": config.AUTO_CLAUSES,
             "sells": config.AUTO_SELLS,
+            # The three that were missing. `list` decides whether the squad goes
+            # on the market at all — so with it off nothing is ever offered and
+            # nothing can ever sell, and the page showed no way to find that out.
+            "list": config.AUTO_LIST,
+            "shield": config.AUTO_SHIELD,
+            "matchday": config.AUTO_MATCHDAY_LINEUP,
         },
         "last_execution": last,
         "executions": executions,
