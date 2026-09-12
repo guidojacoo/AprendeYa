@@ -101,6 +101,106 @@ def _execute_bid(ctx, action):
     return res
 
 
+@scheduler.executor(scheduler.CLAUSE)
+def _execute_clause(ctx, action):
+    """Pay a rival's buyout clause the moment it unlocks.
+
+    The only irreversible spend the bot makes, so every assumption made when this
+    was planned is re-checked against the live API before a euro moves. Planning
+    happened up to a day ago; any of these can have changed since:
+
+      * we may already own him — somebody else's clause payment, or our own bid
+      * the clause may have gone up (his owner raised it, or his value did)
+      * the balance may have gone down (a bid we won in the meantime)
+
+    Anything that no longer holds means we stand down and say why. A skipped
+    clause costs nothing; an over-paid one cannot be undone.
+    """
+    p = action.get("payload") or {}
+    if not config.AUTO_CLAUSES:
+        return {"status": "skipped", "reason": "AUTO_CLAUSES is off"}
+    if ctx.dry_run:
+        return {"status": "skipped", "reason": "dry run"}
+
+    client = ctx.get_client()
+    lid, tid = client.default_ids()
+    player_id, nombre = p.get("player_id"), p.get("nombre")
+    max_pay = int(p.get("max_pay") or 0)
+
+    team = client.team(lid, tid)
+    owned = {str((pl.get("playerMaster") or {}).get("id"))
+             for pl in team.get("players") or []}
+    if str(player_id) in owned:
+        return {"status": "already_owned", "nombre": nombre}
+
+    # Re-read the clause from the live market rather than trusting the plan.
+    current, unlock = None, None
+    for row in client.market(lid) or []:
+        if row.get("discr") != "marketPlayerTeam":
+            continue
+        if str((row.get("playerMaster") or {}).get("id")) != str(player_id):
+            continue
+        pt = row.get("playerTeam") or {}
+        current = pt.get("buyoutClause")
+        unlock = pt.get("buyoutClauseLockedEndTime")
+        break
+    if current is None:
+        return {"status": "gone", "reason": "not on the market any more",
+                "nombre": nombre}
+
+    current = int(current)
+    if current > max_pay:
+        return {"status": "too_expensive", "nombre": nombre,
+                "clause": current, "max_pay": max_pay,
+                "reason": f"clause rose to {current:,}, cap was {max_pay:,}"}
+
+    unlock_at = parse_iso(unlock)
+    if unlock_at is not None and unlock_at > utcnow():
+        # Still locked. Not an error — come back when it opens.
+        return {"retry": True, "status": "locked", "nombre": nombre,
+                "unlocks_at": to_iso(unlock_at)}
+
+    money = int(team.get("teamMoney") or 0)
+    if money - current < config.CASH_RESERVE:
+        return {"status": "insufficient_funds", "nombre": nombre,
+                "clause": current, "money": money,
+                "reserve": config.CASH_RESERVE,
+                "reason": f"{current:,} would leave less than the "
+                          f"{config.CASH_RESERVE:,} reserve"}
+
+    resp = client.pay_buyout_clause(lid, player_id, current)
+    events.emit("clause", f"BOUGHT {nombre} via clause for {current:,}",
+                detail={"was_planned_at": p.get("planned_clause"),
+                        "balance_after": money - current})
+    return {"status": "paid", "nombre": nombre, "amount": current,
+            "response": resp}
+
+
+@scheduler.executor(scheduler.SHIELD)
+def _execute_shield(ctx, action):
+    """Shield our most clause-vulnerable player. Free, and purely defensive."""
+    p = action.get("payload") or {}
+    if not config.AUTO_SHIELD:
+        return {"status": "skipped", "reason": "AUTO_SHIELD is off"}
+    if ctx.dry_run:
+        return {"status": "skipped", "reason": "dry run"}
+    client = ctx.get_client()
+    lid, _ = client.default_ids()
+    ptid = p.get("player_team_id")
+    try:
+        # A shield already in place makes this a no-op; ask before spending the
+        # one-per-run shield on somebody who does not need it.
+        if client.check_shield(lid, ptid):
+            return {"status": "already_shielded", "nombre": p.get("nombre")}
+    except Exception:
+        pass          # the check is an optimisation, not a precondition
+    resp = client.shield_player(lid, ptid)
+    events.emit("note", f"Shielded {p.get('nombre')} "
+                        f"(clause {int(p.get('clause') or 0):,})",
+                detail={"value": p.get("value"), "reason": p.get("reason")})
+    return {"status": "shielded", "nombre": p.get("nombre"), "response": resp}
+
+
 @scheduler.executor(scheduler.LIST_SQUAD)
 def _execute_listing(ctx, action):
     """Put one player on the market at his reserve price."""
@@ -220,6 +320,139 @@ def _plan_bids(ctx, client, lid, team, report):
                     detail={"max": f"{b['amount']:,}", "closes": to_iso(close_at)},
                     status="plan")
     return {"mode": "snipe", "scheduled": scheduled, "skipped": skipped}
+
+
+def _plan_clauses(ctx, lid, team, report):
+    """Queue a buyout for every worthwhile target, timed to its unlock.
+
+    Clauses are a race: the player is gone to whoever pays first, and the window
+    opens at a known instant. Queuing the payment for that instant — rather than
+    noticing it on the next hourly review — is the whole advantage.
+
+    Targets the report says are cheaper to simply BID on are left alone: paying a
+    ~1.67x clause premium for someone already listed at his value is burning money.
+    """
+    targets = report.get("clause_targets") or []
+    if not targets:
+        return {"mode": "on" if config.AUTO_CLAUSES else "off", "queued": []}
+    money = int(team.get("teamMoney") or 0)
+    spendable = max(0, money - config.CASH_RESERVE)
+    if config.MAX_CLAUSE:
+        spendable = min(spendable, config.MAX_CLAUSE)
+
+    queued, skipped = [], []
+    for t in targets:
+        clause = int(t.get("clause") or 0)
+        unlock = parse_iso(t.get("unlock"))
+        if t.get("cheaper_via_bid"):
+            skipped.append({**_target_brief(t), "why": "cheaper to bid for him"})
+            continue
+        if not clause or unlock is None:
+            skipped.append({**_target_brief(t), "why": "no clause or no unlock time"})
+            continue
+        if clause > spendable:
+            skipped.append({**_target_brief(t), "why":
+                            f"{clause:,} is beyond the {spendable:,} we can spend"})
+            continue
+        if not (config.AUTO_CLAUSES and config.AUTO_EXECUTE):
+            skipped.append({**_target_brief(t), "why": "AUTO_CLAUSES is off"})
+            continue
+        if ctx.dry_run:
+            skipped.append({**_target_brief(t), "why": "dry run"})
+            continue
+        scheduler.schedule(
+            scheduler.CLAUSE,
+            {"league_id": lid, "player_id": t.get("player_id"),
+             "nombre": t.get("nombre"), "planned_clause": clause,
+             # A small allowance so a routine value bump between planning and
+             # payment does not cost us the player — but never past what we can
+             # actually afford.
+             "max_pay": min(spendable, round(clause * 1.10))},
+            execute_at=unlock,
+            idempotency_key=f"clause:{lid}:{t.get('player_id')}:{to_iso(unlock)}",
+            expires_at=unlock + timedelta(hours=6))
+        queued.append({**_target_brief(t), "unlock": to_iso(unlock)})
+        events.emit("bid-plan", f"Clause queued: {t.get('nombre')} "
+                                f"for {clause:,}",
+                    detail={"unlocks": to_iso(unlock), "pos": t.get("pos"),
+                            "prob": t.get("prob")}, status="plan")
+    return {"mode": "on" if config.AUTO_CLAUSES else "off",
+            "queued": queued, "skipped": skipped}
+
+
+def _target_brief(t):
+    return {"player_id": t.get("player_id"), "nombre": t.get("nombre"),
+            "pos": t.get("pos"), "clause": t.get("clause"),
+            "prob": t.get("prob")}
+
+
+def _plan_shield(ctx, lid, report):
+    """Queue a shield for our most exposed player, if the report found one."""
+    cand = report.get("shield")
+    if not cand:
+        return {"mode": "on" if config.AUTO_SHIELD else "off", "queued": None}
+    if not (config.AUTO_SHIELD and config.AUTO_EXECUTE) or ctx.dry_run:
+        return {"mode": "off", "would_shield": cand}
+    scheduler.schedule(
+        scheduler.SHIELD,
+        {"league_id": lid, **cand},
+        execute_at=utcnow(),
+        # A blindaje lasts 48h, so at most one per player per day is ever useful.
+        idempotency_key=f"shield:{lid}:{cand.get('player_team_id')}:"
+                        f"{date.today().isoformat()}",
+        expires_at=utcnow() + timedelta(hours=12))
+    return {"mode": "on", "queued": cand}
+
+
+def _kickoffs(client):
+    """Upcoming kickoff times this gameweek, as aware datetimes.
+
+    Defensive on purpose: the calendar payload's date field has several plausible
+    names and this is not worth crashing a review over. Anything unparseable is
+    dropped rather than guessed at, and an empty list simply means the per-match
+    lineup refresh does not run this week.
+    """
+    try:
+        fixtures = client.calendar() or []
+    except Exception:
+        return []
+    out = []
+    for f in fixtures if isinstance(fixtures, list) else []:
+        if not isinstance(f, dict):
+            continue
+        for key in ("date", "matchDate", "kickoff", "startDate", "matchDateTime"):
+            dt = parse_iso(f.get(key))
+            if dt is not None:
+                out.append(dt)
+                break
+    return sorted(set(out))
+
+
+def _plan_matchday_lineups(ctx, client, lid, tid):
+    """Re-optimise the XI shortly before each kickoff.
+
+    A player locks when HIS match starts, not when the gameweek does. A striker
+    playing Sunday can still be swapped on Saturday night if he picks up a knock —
+    and an hourly cadence catches that only by luck. These are free points.
+    """
+    if not (config.AUTO_MATCHDAY_LINEUP and config.AUTO_LINEUP
+            and config.AUTO_EXECUTE) or ctx.dry_run:
+        return {"mode": "off", "queued": []}
+    now = utcnow()
+    lead = timedelta(minutes=config.LINEUP_LEAD_MINUTES)
+    queued = []
+    for ko in _kickoffs(client):
+        at = ko - lead
+        if at <= now or at - now > timedelta(days=8):
+            continue
+        scheduler.schedule(
+            scheduler.LINEUP, {"league_id": lid, "team_id": tid,
+                               "kickoff": to_iso(ko)},
+            execute_at=at,
+            idempotency_key=f"lineup:{lid}:{to_iso(ko)}",
+            expires_at=ko)
+        queued.append(to_iso(at))
+    return {"mode": "on", "queued": queued}
 
 
 def _queue_reminders(report, dry_run=False):
@@ -357,24 +590,30 @@ def run_review(ctx, force=False):
             pass          # incomplete squad: reserves fall back to squad premiums
         listings = _plan_listings(ctx, client, lid, team, best,
                                   report.get("sells"))
+        clauses = _plan_clauses(ctx, lid, team, report)
+        shield = _plan_shield(ctx, lid, report)
+        matchday = _plan_matchday_lineups(ctx, client, lid, tid)
         reminders = _queue_reminders(report, dry_run=ctx.dry_run)
 
         store.put_doc("last_review_at", to_iso(now))
         store.put_doc("last_report",
-                      _summarize(report, lineup_res, bids_res, listings))
+                      _summarize(report, lineup_res, bids_res, listings,
+                                 clauses, shield))
         events.emit("review", f"Review: balance {report['money']:,}",
                     detail={"flips": len(report.get("flips") or []),
                             "tasks": len(report.get("tasks") or []),
                             "scheduled_bids": len(bids_res.get("scheduled") or [])})
         return {"status": "ok", "money": report.get("money"),
                 "lineup": lineup_res, "bids": bids_res, "listings": listings,
+                "clauses": clauses, "shield": shield, "matchday": matchday,
                 "reminders_queued": reminders,
                 "tasks": len(report.get("tasks") or [])}
     finally:
         store.release_lock(REVIEW_LOCK, holder)
 
 
-def _summarize(report, lineup_res, bids_res, listings=None):
+def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
+               shield=None):
     """What the dashboard reads. Deliberately small: a full review payload is
     hundreds of KB of squad data and there is no reason to store it every hour."""
     lu = report.get("lineup") or {}
@@ -392,6 +631,8 @@ def _summarize(report, lineup_res, bids_res, listings=None):
         "tasks": report.get("tasks") or [],
         "bids": bids_res,
         "listings": listings or {},
+        "clauses": clauses or {},
+        "shield": shield or {},
         "rivals": [{"position": r.get("position"),
                     "manager": r.get("manager_name"),
                     "points": r.get("points"),

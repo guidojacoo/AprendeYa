@@ -177,7 +177,19 @@ BID_LEAD_SECONDS = _int("FANTASYBOT_BID_LEAD_SECONDS", 60)
 AUTO_EXECUTE = _flag("FANTASYBOT_AUTO_EXECUTE", True)
 AUTO_LINEUP = _flag("FANTASYBOT_AUTO_LINEUP", True)
 AUTO_BIDS = _flag("FANTASYBOT_AUTO_BIDS", True)
-AUTO_CLAUSES = _flag("FANTASYBOT_AUTO_CLAUSES", False)   # irreversible spend
+# Pay a rival's buyout clause the moment it unlocks. This is the single biggest
+# source of value in the game and the only genuinely irreversible spend the bot
+# makes, so it is off until you turn it on — and it is fenced by CASH_RESERVE and
+# MAX_CLAUSE below.
+AUTO_CLAUSES = _flag("FANTASYBOT_AUTO_CLAUSES", False)
+# Shield our own most clause-vulnerable player. Free (a rewarded-ad flow) and
+# purely defensive. Off by default only because LaLiga's shield PUT format is
+# noted in api.py as not yet confirmed against a live account.
+AUTO_SHIELD = _flag("FANTASYBOT_AUTO_SHIELD", False)
+# Re-optimise the XI before each kickoff. Players lock when THEIR match starts,
+# not when the gameweek does, so a Sunday striker can still be swapped on
+# Saturday night — this is free points that an hourly cadence alone misses.
+AUTO_MATCHDAY_LINEUP = _flag("FANTASYBOT_AUTO_MATCHDAY_LINEUP", True)
 # Keep the whole squad standing on the market. Listing is not selling — it is an
 # ask — so this is safe on its own: nothing leaves without AUTO_SELLS.
 AUTO_LIST = _flag("FANTASYBOT_AUTO_LIST", True)
@@ -197,6 +209,16 @@ LLM_MODEL = _env("LLM_MODEL")
 LLM_BASE_URL = _env("LLM_BASE_URL")
 LLM_TIMEOUT = _int("LLM_TIMEOUT", 25)
 LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 1500)
+
+# --- spending limits ---------------------------------------------------------
+# Cash the bot must always leave in the bank. A clause that would take the
+# balance below this is refused: being unable to answer the next opportunity is
+# itself a cost, and an empty account cannot bid at a market close.
+CASH_RESERVE = _int("FANTASYBOT_CASH_RESERVE", 0)
+# Hard ceiling on a single buyout clause. 0 means no ceiling beyond the balance.
+MAX_CLAUSE = _int("FANTASYBOT_MAX_CLAUSE", 0)
+# How early (minutes) before a kickoff to re-optimise the lineup.
+LINEUP_LEAD_MINUTES = _int("FANTASYBOT_LINEUP_LEAD_MINUTES", 25)
 
 # Bootstrap credential: lets a fresh deployment seed tokens into the database
 # without ever running the interactive login on the server.

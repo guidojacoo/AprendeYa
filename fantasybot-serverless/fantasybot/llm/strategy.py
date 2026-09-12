@@ -31,14 +31,29 @@ from . import client as llm_client
 CAP_MIN_FACTOR = 0.7
 CAP_MAX_FACTOR = 1.3
 
-SYSTEM = """You are the strategist for an autonomous LALIGA Fantasy manager.
+SYSTEM = """You are the strategist for an autonomous LALIGA Fantasy manager whose
+goal is to finish the season FIRST in his league.
 
-You do NOT execute anything. You read the state and return adjustments; separate
-deterministic code applies them, and will clamp or ignore anything unsafe.
+You do NOT execute anything. The deterministic engine below you already optimises
+the lineup, prices flips, snipes bids at the close and pays buyout clauses on
+time. What it cannot do is read the SEASON: it has no opinion on whether this is
+a moment to protect a lead or to gamble for one.
+
+That is your job. Judge from `standing`:
+
+- Comfortably ahead, season late  -> protect. Favour certainty over upside: keep
+  proven starters, do not stretch caps, avoid tying up cash in speculation.
+- Close race                      -> maximise expected points. Normal caps, take
+  the flips with real margin, prefer players who start every week.
+- Behind, and the season is short -> variance is your friend. A safe second place
+  is worth the same as last. Stretch for the differentials, accept the risk.
+- Early season                    -> build value. Trade aggressively; points lost
+  now matter less than a bigger squad later.
 
 Reply with ONE JSON object and nothing else:
 {
-  "summary": "2-3 sentences on the situation",
+  "summary": "2-3 sentences: where we stand and what you are playing for",
+  "stance":  "protect" | "balanced" | "chase" | "build",
   "bid_caps":  [{"market_id": "<id already in scheduled_bids>", "max_bid": <int>, "reason": "..."}],
   "avoid":     ["<market_id to drop from the plan>"],
   "sell":      [{"player_id": "<id>", "price": <int>, "reason": "..."}],
@@ -49,7 +64,9 @@ Rules:
 - Only use market_ids that appear in scheduled_bids. Anything else is ignored.
 - Caps are advisory; they get clamped to +-30% of the computed cap and to the balance.
 - "sell" produces a task for the human, never a sale.
-- Omit a key rather than inventing entries. An empty plan is a valid answer."""
+- `rivals` shows each opponent's estimated cash — that is who can outbid us.
+- Omit a key rather than inventing entries. An empty plan is a valid answer, and a
+  season going well rarely needs adjusting."""
 
 
 def enabled():
@@ -67,9 +84,26 @@ def _context(ctx):
     memory = store.get_doc("agent_memory", "") or ""
     queued = [a for a in store.pending_actions(limit=25)
               if a.get("type") == scheduler.BID]
+    rivals = report.get("rivals") or []
+    me = next((r for r in rivals if r.get("is_me")), None)
+    leader = rivals[0] if rivals else None
+    standing = None
+    if me:
+        standing = {
+            "position": me.get("position"),
+            "teams": len(rivals),
+            "points": me.get("points"),
+            "points_behind_leader": ((leader or {}).get("points") or 0)
+                                    - (me.get("points") or 0),
+            "leader": (leader or {}).get("manager"),
+        }
     return {
         "now": to_iso(utcnow()),
         "memory": memory,
+        "standing": standing,
+        "rivals": rivals,
+        "queued_clauses": (report.get("clauses") or {}).get("queued") or [],
+        "shield": (report.get("shield") or {}).get("queued"),
         "balance": report.get("money"),
         "matchday": report.get("matchday"),
         "formation": report.get("formation"),
@@ -100,12 +134,19 @@ def run(ctx):
     store.save_decision("llm_strategy", info.get("model"), decision)
 
     applied = apply_decision(decision, context)
+    if decision.get("stance"):
+        # Recorded, not obeyed: the stance explains the adjustments it made, and
+        # gives the next run something to be consistent with.
+        store.put_doc("stance", {"stance": str(decision["stance"])[:40],
+                                 "at": to_iso(utcnow()),
+                                 "why": (decision.get("summary") or "")[:400]})
     if decision.get("memory"):
         store.put_doc("agent_memory", str(decision["memory"])[:2000])
     events.emit("note", "Strategic pass",
                 detail={"summary": (decision.get("summary") or "")[:300],
                         "applied": applied})
     return {"status": "ok", "model": info.get("model"),
+            "stance": decision.get("stance"),
             "summary": decision.get("summary"), "applied": applied}
 
 

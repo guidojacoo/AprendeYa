@@ -49,6 +49,7 @@ def _status(handler):
         # in the hourly report — offers are decided every tick.
         "offers": ((last or {}).get("summary") or {}).get("offers"),
         "decisions": store.recent_decisions(limit=5),
+        "stance": store.get_doc("stance", None),
         "events": list(reversed(store.load_events(limit=limit))),
     }
 

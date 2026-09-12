@@ -188,6 +188,7 @@
           <div class="note" id="last-note">—</div></div>
       </div>
       <section><h2>Alineación</h2><div id="lineup"></div></section>
+      <section><h2>Estrategia</h2><div id="stance"></div></section>
       <section><h2>Tareas para vos</h2><div id="tasks"></div></section>
     </div>
 
@@ -195,6 +196,8 @@
     <div data-panel="mercado" class="hide">
       <section><h2>Ofertas recibidas</h2><div id="offers"></div></section>
       <section><h2>Oportunidades de compra</h2><div class="scroll" id="flips"></div></section>
+      <section><h2>Cláusulas programadas</h2><div id="clauses"></div></section>
+      <section><h2>Blindaje</h2><div id="shield"></div></section>
       <section><h2>Mi plantilla en venta</h2><div class="scroll" id="listings"></div></section>
     </div>
 
@@ -314,6 +317,38 @@ function render(d){
       +'<small>'+esc(rep.lineup_changed?'cambiada en la última revisión':'ya era la óptima')
       +(lr.incomplete?' · ⚠ incompleta':'')+'</small></div></div>')
     :'<div class="empty">Todavía sin datos de alineación.</div>';
+
+  /* estrategia */
+  const st=d.stance;
+  const STANCE={protect:['ok','Protegiendo la ventaja'],
+    balanced:['idle','Maximizando puntos'],chase:['warn','Arriesgando para remontar'],
+    build:['idle','Construyendo plantilla']};
+  $('stance').innerHTML=st
+    ?('<div class="row"><span class="tag '+(STANCE[st.stance]||['idle'])[0]+'">'
+      +esc((STANCE[st.stance]||[,st.stance])[1]||st.stance)+'</span>'
+      +'<div class="m"><small>'+esc(st.why||'')+'</small></div>'
+      +'<div class="right">'+esc(ago(st.at))+'</div></div>')
+    :'<div class="empty">Sin LLM activado — el bot juega con reglas deterministas.</div>';
+
+  /* cláusulas */
+  const cl=rep.clauses||{}, clq=cl.queued||[], cls=cl.skipped||[];
+  list($('clauses'),[...clq.map(c=>[c,'ok','en cola']),
+                     ...cls.map(c=>[c,'warn','descartada'])],
+    ([c,cls2,label])=>'<div class="row"><span class="tag '+cls2+'">'+label+'</span>'
+    +'<div class="m"><b>'+esc(c.nombre)+'</b> '+esc(c.pos||'')
+    +'<small>'+esc(c.why||('se abre '+when(c.unlock,true)))
+    +(c.prob?' · '+esc(c.prob)+'% titular':'')+'</small></div>'
+    +'<div class="right">'+esc(short(c.clause))+'</div></div>',
+    cl.mode==='off'?'Cláusulas automáticas apagadas.':'Ningún objetivo ahora mismo.');
+
+  /* blindaje */
+  const sh=rep.shield||{}, cand=sh.queued||sh.would_shield;
+  $('shield').innerHTML=cand
+    ?('<div class="row"><span class="tag '+(sh.queued?'ok':'warn')+'">'
+      +(sh.queued?'blindado':'sugerido')+'</span><div class="m"><b>'
+      +esc(cand.nombre)+'</b><small>'+esc(cand.reason||'')+'</small></div>'
+      +'<div class="right">'+esc(short(cand.clause))+'</div></div>')
+    :'<div class="empty">Ningún jugador tuyo está en riesgo ahora.</div>';
 
   list($('tasks'),rep.tasks,t=>
     '<div class="row"><div class="k">#'+esc(t.id)+'</div><div class="m">'+esc(t.text)
