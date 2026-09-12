@@ -116,15 +116,27 @@ class AListingThatDidNotTake(StorageTestCase):
                             "price": 3_000_000, "value": 2_600_000}}
 
     class _Client:
-        def __init__(self, after):
+        """The executor reads the market twice: once before, to avoid listing a
+        player who is already up, and once after, to check the listing took. The
+        double has to answer differently the second time or the first read sees
+        the outcome and the executor stands down before doing anything."""
+
+        def __init__(self, after, fail_second=False):
             self.after = after
+            self.fail_second = fail_second
             self.sold = []
+            self.reads = 0
 
         def sell_player(self, lid, ptid, price):
             self.sold.append((ptid, price))
             return {"ok": True}
 
         def market(self, lid):
+            self.reads += 1
+            if self.reads == 1:
+                return []          # not on the market yet
+            if self.fail_second:
+                raise RuntimeError("market unavailable")
             return self.after
 
     def _run(self, client):
@@ -151,10 +163,6 @@ class AListingThatDidNotTake(StorageTestCase):
         self.assertIs(got["confirmed"], False)
 
     def test_a_check_that_could_not_run_claims_nothing(self):
-        class Blind(self._Client):
-            def market(self, lid):
-                raise RuntimeError("market unavailable")
-
-        got = self._run(Blind([]))
+        got = self._run(self._Client([], fail_second=True))
         self.assertEqual(got["status"], "listed")
         self.assertIsNone(got["confirmed"], "unknown is not a verdict")
