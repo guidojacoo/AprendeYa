@@ -578,6 +578,12 @@ document.addEventListener('visibilitychange',()=>{
   if(!document.hidden&&secret&&!app.classList.contains('hide'))load();
 });
 
+/* Ping the public health endpoint on load. It is the endpoint that repairs a
+   scheduler still pointing at the migration's placeholder, and it needs no
+   secret — so simply OPENING this page is enough to get the clock running,
+   whether or not you go on to log in. Fire and forget. */
+fetch('/api').catch(()=>{});
+
 if(secret)start(); else gate.classList.remove('hide');
 </script>
 </body>
