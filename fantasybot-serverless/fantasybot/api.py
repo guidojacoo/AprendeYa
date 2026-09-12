@@ -256,9 +256,13 @@ class FantasyClient:
 
         NOTE: like sell_player, LaLiga keys this on the playerTeamId (your roster-slot id),
         NOT the playerMaster id — and the request FIELD is still named `playerId` while its
-        VALUE is the playerTeamId (field-name-vs-value mismatch). The exact acceptance —
-        whether this PUT succeeds without a real rewarded ad actually being watched — is
-        TO-BE-LIVE-CONFIRMED before deploy.
+        VALUE is the playerTeamId (field-name-vs-value mismatch).
+
+        CONFIRMED LIVE. This was marked "to be confirmed before deploy" on the open
+        question of whether the PUT is accepted without a rewarded ad actually
+        having been watched. It is: the league activity feed recorded two shields
+        placed by this flow, at 02:02 and 06:14, hours apart and at times nobody
+        is shielding players by hand.
         """
         return self.put(self._cmp(f"/league/{league_id}/shield/player?x-lang=es"),
                         {"playerId": player_team_id, "rewardedAdType": "Blindaje",
