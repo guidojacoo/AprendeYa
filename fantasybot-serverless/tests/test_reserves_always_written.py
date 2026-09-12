@@ -103,3 +103,58 @@ class WhyNobodyGoesUp(StorageTestCase):
         got = tick._listing_skips(self._squad(5_000_000), [],
                                   [{"player_id": "m1"}])
         self.assertEqual(got, {})
+
+
+class AListingThatDidNotTake(StorageTestCase):
+    """The squad read as listed at one moment and absent from the market five
+    minutes later. "LaLiga refused this" and "the listing expired" are different
+    problems, and they are indistinguishable if the response is never read."""
+
+    def _action(self):
+        return {"payload": {"league_id": "L1", "player_team_id": "pt1",
+                            "player_id": "m1", "nombre": "Uno",
+                            "price": 3_000_000, "value": 2_600_000}}
+
+    class _Client:
+        def __init__(self, after):
+            self.after = after
+            self.sold = []
+
+        def sell_player(self, lid, ptid, price):
+            self.sold.append((ptid, price))
+            return {"ok": True}
+
+        def market(self, lid):
+            return self.after
+
+    def _run(self, client):
+        ctx = mock.Mock(dry_run=False)
+        ctx.out_of_time.return_value = False
+        ctx.get_client.return_value = client
+        saved = config.AUTO_LIST
+        config.AUTO_LIST = True
+        try:
+            return tick._execute_listing(ctx, self._action())
+        finally:
+            config.AUTO_LIST = saved
+
+    def test_a_listing_that_appears_is_confirmed(self):
+        client = self._Client([{"discr": "marketPlayerTeam",
+                                "playerMaster": {"id": "m1"}}])
+        got = self._run(client)
+        self.assertEqual(got["status"], "listed")
+        self.assertIs(got["confirmed"], True)
+
+    def test_a_listing_that_does_not_appear_is_reported_refused(self):
+        got = self._run(self._Client([]))
+        self.assertEqual(got["status"], "refused")
+        self.assertIs(got["confirmed"], False)
+
+    def test_a_check_that_could_not_run_claims_nothing(self):
+        class Blind(self._Client):
+            def market(self, lid):
+                raise RuntimeError("market unavailable")
+
+        got = self._run(Blind([]))
+        self.assertEqual(got["status"], "listed")
+        self.assertIsNone(got["confirmed"], "unknown is not a verdict")

@@ -279,11 +279,27 @@ def _execute_listing(ctx, action):
     if str(p.get("player_id")) in already:
         return {"status": "already_listed", "nombre": p.get("nombre")}
     resp = client.sell_player(p["league_id"], p["player_team_id"], int(p["price"]))
+    # Check that it took. The squad was reported listed at one moment and absent
+    # from the market five minutes later, and the difference between "LaLiga
+    # refused this" and "the listing expired" is invisible if the response is
+    # never read. A rejection here is quiet: the call returns, the action is
+    # marked done, and nobody is on the market.
+    landed = None
+    if not ctx.out_of_time(margin=4):
+        try:
+            landed = str(p.get("player_id")) in {
+                str((r.get("playerMaster") or {}).get("id"))
+                for r in client.market(p["league_id"]) or []
+                if r.get("discr") == "marketPlayerTeam"}
+        except Exception:                        # noqa: BLE001
+            landed = None            # could not check; do not claim either way
     events.emit("sell", f"En venta: {p.get('nombre')} a {int(p['price']):,} €",
-                detail={"reserve": p.get("price"), "value": p.get("value")},
-                status="plan")
-    return {"status": "listed", "nombre": p.get("nombre"),
-            "price": p.get("price"), "response": resp}
+                detail={"reserve": p.get("price"), "value": p.get("value"),
+                        "confirmado": landed},
+                status="plan" if landed is not False else "error")
+    return {"status": "listed" if landed is not False else "refused",
+            "nombre": p.get("nombre"), "price": p.get("price"),
+            "confirmed": landed, "response": resp}
 
 
 @scheduler.executor(REMINDER)
