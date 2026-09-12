@@ -1000,12 +1000,14 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         summary["pending"] = len(store.pending_actions(limit=50))
         net.clear_deadline()
         summary["ok"] = True
+        # Before the execution is filed, so the dashboard's own record of this
+        # run carries it too — not only the caller that happened to ask.
+        summary["clock"] = _clock_report(store, source)
         summary["duration_seconds"] = round(time.monotonic() - started, 2)
         store.finish_execution(execution_id, DONE, summary=summary)
         _note_health(store, ok=True)
         _check_token_expiry(store)
         _heal_scheduler_url(store)
-        summary["clock"] = _clock_report(store, source)
         return summary
     except Exception as e:                       # noqa: BLE001
         net.clear_deadline()
