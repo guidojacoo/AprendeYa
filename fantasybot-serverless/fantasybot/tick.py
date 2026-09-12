@@ -43,6 +43,16 @@ _SETTING_DEFAULTS = {
 }
 
 
+def bids_allowed():
+    """Whether the bot may actually send a bid right now.
+
+    Both flags have to be on. FANTASYBOT_AUTO_EXECUTE is the master switch people
+    reach for to watch the bot before trusting it, so it must gate bidding too —
+    not just the lineup.
+    """
+    return bool(config.AUTO_EXECUTE and config.AUTO_BIDS)
+
+
 def setting(name):
     try:
         value = get_storage().get_settings().get(name)
@@ -62,18 +72,24 @@ def _execute_bid(ctx, action):
     than our budget, we bid nothing and ask to be called again — a bid that was
     never sent can always be retried, which is exactly why the budget check comes
     BEFORE the request and never after it.
+
+    The autonomy flags are re-checked HERE, not only where the bid was planned.
+    An action queued while autonomy was on must not fire after you turned it off:
+    the switch has to hold at the moment money would actually move, or it is not
+    a switch.
     """
     p = action.get("payload") or {}
     league_id = p.get("league_id")
     market_id = p.get("market_id")
     budget = max(2.0, ctx.remaining() - 4.0)
+    dry = ctx.dry_run or not bids_allowed()
     res = bidding.snipe(league_id, market_id, int(p.get("max_bid") or 0),
-                        dry_run=ctx.dry_run, log=ctx.log,
+                        dry_run=dry, log=ctx.log,
                         client=ctx.get_client(), budget_seconds=budget)
     if res.get("status") == "waiting":
         # Still early. Stay queued; the scheduler will wake us closer to the close.
         return {"retry": True, **res}
-    if res.get("status") == "bid" and not ctx.dry_run:
+    if res.get("status") == "bid" and not dry:
         # Mirror it into the local bid ledger so `sync_bids` knows this player is
         # already covered and does not propose him all over again.
         bids = state.load_bids()
@@ -141,8 +157,12 @@ def _plan_bids(ctx, client, lid, team, report):
     listing, fired seconds before that listing closes.
     """
     mode = setting("bid_mode")
-    if not config.AUTO_BIDS:
-        return {"mode": "disabled", "scheduled": []}
+    if not bids_allowed():
+        # Still report what it WOULD have bid on, so the dashboard shows the
+        # thinking while autonomy is off. Nothing is queued, so nothing can fire.
+        return {"mode": "observe-only", "scheduled": [],
+                "would_bid": execute_mod.plan_bids(client, lid, team),
+                "reason": "FANTASYBOT_AUTO_EXECUTE/AUTO_BIDS is off"}
     if mode == "immediate":
         return {"mode": "immediate",
                 **execute_mod.sync_bids(client, lid, team,
