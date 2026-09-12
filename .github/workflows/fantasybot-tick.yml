@@ -122,6 +122,7 @@ jobs:
                                   sleep_seconds, actions, review: (.review.status // null),
                                   listed: (.review.listings.listed | length?),
                                   gaps: (.review.gaps // null),
+                                  squad: (.review.squad // null),
                                   skipped_phases: (.review.skipped // null),
                                   clock, error}' 2>/dev/null || echo "$BODY"
 

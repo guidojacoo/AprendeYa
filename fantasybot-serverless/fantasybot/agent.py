@@ -138,6 +138,29 @@ def clause_targets(market, team, prob_index):
     return targets
 
 
+def _squad_census(team, market):
+    """The squad as the bot sees it: how many of each line, and how many of them
+    are standing on the market right now.
+
+    The second half is not decoration. If LaLiga ever drops listed players from
+    the squad payload, a bot that lists its whole squad would read itself as
+    empty and keep buying — and the only way to tell that apart from a counting
+    bug is to see both numbers together.
+    """
+    mine = {str((r.get("playerMaster") or {}).get("id"))
+            for r in market or []
+            if r.get("discr") == "marketPlayerTeam"}
+    players = team.get("players") or []
+    return {
+        "counts": needs_mod.squad_counts(team),
+        "total": len(players),
+        "listed_now": sum(1 for p in players
+                          if str((p.get("playerMaster") or {}).get("id")) in mine),
+        "position_ids": sorted({repr((p.get("playerMaster") or {}).get("positionId"))
+                                for p in players}),
+    }
+
+
 def _sync_tasks(gaps, targets, sells, lineup_changed):
     """Keeps the task list: creates missing ones, closes resolved ones."""
     # squad gaps
@@ -388,6 +411,11 @@ def review(client, days_to_matchday=None):
         "flips": flips,
         "market": market,
         "gaps": gaps,
+        # What it actually counted, next to what it concluded. "No tengo ningún
+        # POR" while three sit in the squad is a claim with no evidence beside
+        # it, and chasing that without the counts cost two deploy cycles. If the
+        # two ever disagree again, the disagreement is right here.
+        "squad": _squad_census(team, market),
         "needs": needs_report,
         "sells": sells,
         "clause_targets": targets,

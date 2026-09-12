@@ -983,6 +983,7 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "lineup_changed": bool(lu.get("changed")),
         "lineup_result": lineup_res,
         "gaps": report.get("gaps"),
+        "squad": report.get("squad"),
         "flips": (report.get("flips") or [])[:5],
         # The whole market, scored — including everything declined. Trimmed to
         # what a phone can render, not to what the bot considered.
