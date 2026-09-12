@@ -152,6 +152,30 @@ lleve unos días funcionando.
 
 ---
 
+### Desactiva la caché de build (importante)
+
+Vercel construye cada función de `api/` por separado y **reutiliza la build de
+una función cuyo propio fichero no cambió** — aunque el paquete compartido
+`fantasybot/` sí haya cambiado. El resultado es que `/api` puede estar sirviendo
+el commit que acabas de subir mientras `/api/tick` sigue ejecutando código de
+hace varios commits.
+
+Esto costó una noche entera: arreglos que parecían no hacer efecto, y conclusiones
+sacadas de una versión que no era la desplegada.
+
+Cómo verlo: `/api` y la respuesta de `/api/tick` traen un campo `deploy` con el
+commit que cada una está ejecutando. **Si no coinciden, la caché te está mintiendo.**
+
+Cómo arreglarlo, una sola vez:
+
+* Vercel → Settings → Environment Variables → añade `VERCEL_FORCE_NO_BUILD_CACHE`
+  con valor `1`, **o**
+* en cada despliegue dudoso: Deployments → ⋯ → Redeploy, y **desmarca** "Use
+  existing Build Cache".
+
+El workflow de GitHub ya comprueba esto solo: espera a que `/api/tick` reporte el
+commit que acabas de subir antes de validar nada, y avisa si nunca llega.
+
 ## 4. GitHub Actions — el reloj
 
 En el repo: **Settings → Secrets and variables → Actions**
