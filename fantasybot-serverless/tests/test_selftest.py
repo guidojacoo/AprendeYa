@@ -122,10 +122,61 @@ class SchedulerProbe(_NoNetwork):
         self.assertEqual(status, selftest.FAIL)
         self.assertIn("BOT_CRON_SECRET", detail)
 
-    def test_a_recent_execution_is_ok(self):
-        self.store.finish_execution(self.store.start_execution("tick"), "done")
-        status, _ = selftest._scheduler()
+    def test_an_automated_wake_up_is_ok(self):
+        self.store.finish_execution(self.store.start_execution("tick:db"),
+                                    "done")
+        status, detail = selftest._scheduler()
         self.assertEqual(status, selftest.OK)
+        self.assertIn("db", detail)
+
+    def test_hand_triggered_runs_alone_are_not_a_working_scheduler(self):
+        """A run you clicked looks exactly like a scheduled one in the log. If
+        every recent execution came from a person, nothing is automating this —
+        and saying OK there is the diagnosis lying."""
+        for _ in range(3):
+            self.store.finish_execution(
+                self.store.start_execution("tick:unknown"), "done")
+        status, detail = selftest._scheduler()
+        self.assertEqual(status, selftest.WARN)
+        self.assertIn("a mano", detail)
+
+    def test_the_github_clock_counts_as_automated(self):
+        self.store.finish_execution(self.store.start_execution("tick:github"),
+                                    "done")
+        self.assertEqual(selftest._scheduler()[0], selftest.OK)
+
+
+class DatabaseClockProbe(StorageTestCase):
+    """The migration ships a placeholder URL you are meant to replace. Left in,
+    pg_net posts to a domain that does not resolve, every minute, forever — and
+    the bot is never woken. That must never read as OK."""
+
+    def _probe(self, rows):
+        with mock.patch.object(self.store, "_request", return_value=rows,
+                               create=True),              mock.patch.object(type(self.store), "kind", "supabase"):
+            return selftest._db_scheduler()
+
+    def test_the_placeholder_is_a_failure_not_a_pass(self):
+        status, detail = self._probe([{"app_url": "https://TU-APP.vercel.app",
+                                       "enabled": True}])
+        self.assertEqual(status, selftest.FAIL)
+        self.assertIn("placeholder", detail)
+        self.assertIn("update public.scheduler_config", detail)
+
+    def test_a_real_url_passes(self):
+        status, detail = self._probe([{"app_url": "https://real.vercel.app",
+                                       "enabled": True}])
+        self.assertEqual(status, selftest.OK)
+        self.assertIn("real.vercel.app", detail)
+
+    def test_disabled_is_reported(self):
+        status, _ = self._probe([{"app_url": "https://real.vercel.app",
+                                  "enabled": False}])
+        self.assertEqual(status, selftest.WARN)
+
+    def test_an_empty_url_is_a_failure(self):
+        self.assertEqual(self._probe([{"app_url": "", "enabled": True}])[0],
+                         selftest.FAIL)
 
 
 class SourcesProbe(StorageTestCase):
@@ -152,3 +203,86 @@ class SourcesProbe(StorageTestCase):
     def test_both_sources_down_is_still_only_a_warning(self):
         """The bot keeps playing with less information; that is not a failure."""
         self.assertEqual(self._probe(0, 0)[0], selftest.WARN)
+
+
+class SelfHealingClock(StorageTestCase):
+    """The bot repairing the database's clock.
+
+    An unreplaced placeholder fails in the worst possible way: pg_net posts to a
+    domain that does not resolve, every minute, forever, and nothing is ever
+    woken. No error, no symptom, just a bot that quietly does nothing. A running
+    function knows its own address, so it can fix the row — but only when nobody
+    chose that value on purpose.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from fantasybot import config, tick
+        self.tick, self.config = tick, config
+        self._saved_url = config.VERCEL_APP_URL
+        config.VERCEL_APP_URL = "https://real.vercel.app"
+        self.addCleanup(lambda: setattr(config, "VERCEL_APP_URL",
+                                        self._saved_url))
+
+    def _heal(self, stored):
+        calls = []
+
+        def fake_request(method, path, params=None, body=None, prefer=None):
+            calls.append((method, body))
+            if method == "GET":
+                return [] if stored is None else [{"app_url": stored}]
+            return None
+
+        with mock.patch.object(type(self.store), "kind", "supabase"), \
+             mock.patch.object(self.store, "_request", fake_request,
+                               create=True):
+            self.tick._heal_scheduler_url(self.store)
+        return [b for m, b in calls if m == "PATCH"]
+
+    def test_it_replaces_a_placeholder(self):
+        written = self._heal("https://TU-APP.vercel.app")
+        self.assertEqual(written[0]["app_url"], "https://real.vercel.app")
+
+    def test_it_replaces_an_empty_url(self):
+        self.assertTrue(self._heal(""))
+
+    def test_it_never_overrides_a_url_somebody_chose(self):
+        """Two deployments can share one database; hijacking the other one's
+        scheduler would be worse than the problem being solved."""
+        self.assertEqual(self._heal("https://otra-app.vercel.app"), [])
+
+    def test_a_missing_migration_is_not_an_error(self):
+        self.assertEqual(self._heal(None), [])
+
+    def test_it_does_nothing_without_a_known_address(self):
+        self.config.VERCEL_APP_URL = ""
+        with mock.patch.object(self.config, "self_url", return_value=""):
+            self.assertEqual(self._heal("https://TU-APP.vercel.app"), [])
+
+
+class SelfUrl(unittest.TestCase):
+    def test_it_prefers_the_stable_production_domain(self):
+        import os
+        from fantasybot import config
+        saved = config.VERCEL_APP_URL
+        config.VERCEL_APP_URL = ""
+        try:
+            with mock.patch.dict(os.environ, {
+                    "VERCEL_PROJECT_PRODUCTION_URL": "stable.vercel.app",
+                    "VERCEL_URL": "deploy-abc123.vercel.app"}, clear=False):
+                self.assertEqual(config.self_url(), "https://stable.vercel.app")
+        finally:
+            config.VERCEL_APP_URL = saved
+
+    def test_it_adds_the_scheme_vercel_leaves_off(self):
+        import os
+        from fantasybot import config
+        saved = config.VERCEL_APP_URL
+        config.VERCEL_APP_URL = ""
+        try:
+            with mock.patch.dict(os.environ,
+                                 {"VERCEL_PROJECT_PRODUCTION_URL": "x.vercel.app",
+                                  "VERCEL_URL": ""}, clear=False):
+                self.assertTrue(config.self_url().startswith("https://"))
+        finally:
+            config.VERCEL_APP_URL = saved

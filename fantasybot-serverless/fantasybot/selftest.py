@@ -133,9 +133,23 @@ def _scheduler():
     if mins is None:
         return WARN, "Hay ejecuciones, pero sin fecha legible."
     if mins > 30:
-        return WARN, (f"La última ejecución fue hace {mins:.0f} min. El cron "
-                      f"debería correr cada 5.")
-    return OK, f"Última ejecución hace {mins:.0f} min ({last.get('status')})."
+        return WARN, (f"La última ejecución fue hace {mins:.0f} min. El reloj "
+                      f"debería despertarlo cada minuto.")
+    # WHICH clock matters as much as whether one ran: a run triggered only by
+    # hand looks identical to an automated one until you ask who sent it.
+    recent = get_storage().recent_executions(limit=20)
+    sources = {}
+    for r in recent:
+        src = (r.get("trigger") or "?").split(":")[-1]
+        sources[src] = sources.get(src, 0) + 1
+    automated = sum(n for k, n in sources.items() if k in ("db", "github"))
+    mix = ", ".join(f"{k}×{n}" for k, n in sorted(sources.items()))
+    if not automated:
+        return WARN, (f"Última ejecución hace {mins:.0f} min, pero ninguna de "
+                      f"las {len(recent)} recientes vino de un reloj "
+                      f"automático ({mix}). Lo estás despertando a mano.")
+    return OK, (f"Última ejecución hace {mins:.0f} min ({last.get('status')}). "
+                f"Origen de las recientes: {mix}.")
 
 
 def _db_scheduler():
@@ -158,7 +172,20 @@ def _db_scheduler():
         return WARN, "scheduler_config existe pero está vacía."
     if not rows[0].get("enabled"):
         return WARN, "El reloj de la base está desactivado (enabled = false)."
-    return OK, f"La base despierta al bot cada minuto ({rows[0].get('app_url')})."
+    url = (rows[0].get("app_url") or "").strip()
+    # The migration ships a placeholder you are meant to replace. Left in, pg_net
+    # dutifully posts to a domain that does not resolve, every minute, forever —
+    # and the bot is never woken. Reporting that as OK is the diagnostic lying,
+    # which is worse than having no diagnostic at all.
+    if (not url) or "TU-APP" in url.upper() or "your-app" in url.lower():
+        return FAIL, ("scheduler_config.app_url sigue con el placeholder "
+                      f"({url or 'vacío'}). pg_net está llamando a un dominio "
+                      f"que no existe, así que NADIE está despertando al bot. "
+                      f"Arreglalo con:  update public.scheduler_config "
+                      f"set app_url = 'https://TU-DOMINIO-REAL.vercel.app';")
+    if not url.startswith("https://"):
+        return WARN, f"app_url no es https: {url}"
+    return OK, f"La base despierta al bot cada minuto ({url})."
 
 
 def _llm():
