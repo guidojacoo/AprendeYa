@@ -13,7 +13,7 @@ notifications are built on top (see README / next steps).
 
 from datetime import date, datetime, timedelta
 
-from . import config, state
+from . import cache, config, state
 from .matching import match_name, POS
 from .strategy import captain as captain_mod
 from .strategy import flip, needs as needs_mod, sell as sell_mod
@@ -45,6 +45,11 @@ MIN_CLAUSE_PROB = 40  # don't recommend BUYING a player unlikely to start: a ben
                       # wasted money. Unknown prob (name unmatched) is kept, not penalised.
 
 
+# Six hours: long enough that a gameweek is read once, short enough that a
+# postponed fixture is picked up the same day.
+FIXTURE_CACHE_TTL = 6 * 3600
+
+
 def captain_fixture_difficulty(client) -> dict:
     """{team_id: difficulty of the rival THAT team faces this gameweek} for the captain
     picker (see strategy/captain.py). {} on ANY failure (network hiccup, unexpected API
@@ -53,11 +58,24 @@ def captain_fixture_difficulty(client) -> dict:
     also cost the coach/captain/bench that `_premium_extras` would otherwise still
     build successfully.
     """
-    try:
+    # Cached, because it stopped being a premium extra. It now shapes every XI
+    # and every signing, so it runs on every review — and it costs three calls,
+    # one of them `all_players()`, the heaviest read the API has. Twice a review
+    # (here and in the lineup step) against a function Vercel kills at 60
+    # seconds is a bill worth paying once a gameweek instead.
+    #
+    # The fixtures for a gameweek do not change during it, so a stale entry is
+    # not a wrong answer, only an old one — and `cached` returns the default
+    # rather than raising, which keeps the old behaviour when anything fails.
+    def _compute():
         week = client.current_week() or {}
         fixtures = client.calendar(week.get("weekNumber")) or []
         players = client.all_players() or []
         return captain_mod.fixture_difficulty_by_team(players, fixtures)
+
+    try:
+        return cache.cached("fixture_difficulty", FIXTURE_CACHE_TTL,
+                            _compute, default={}) or {}
     except Exception:
         return {}
 

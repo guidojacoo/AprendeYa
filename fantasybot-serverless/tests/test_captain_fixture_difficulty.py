@@ -6,6 +6,7 @@ must degrade to today's form-only captain, never crash the whole review.
 import unittest
 
 from fantasybot import agent
+from tests.support import StorageTestCase
 
 
 class _FakeClient:
@@ -31,7 +32,12 @@ class _FakeClient:
         return self._players
 
 
-class CaptainFixtureDifficulty(unittest.TestCase):
+class CaptainFixtureDifficulty(StorageTestCase):
+    """A StorageTestCase because the result is cached now: it runs on every
+    review rather than only in a premium league, and it costs three API calls
+    with `all_players()` among them. Sharing one cache entry across tests would
+    let whichever ran first decide what the others see."""
+
     def test_happy_path_wires_the_three_calls_into_a_difficulty_map(self):
         players = [{"id": "1", "teamId": "weak", "marketValue": 1_000_000},
                   {"id": "2", "teamId": "rich", "marketValue": 50_000_000}]
