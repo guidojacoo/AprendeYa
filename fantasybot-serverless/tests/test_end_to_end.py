@@ -13,7 +13,7 @@ The client is fake but shaped like the real payloads; the storage is real
 from datetime import timedelta
 from unittest import mock
 
-from fantasybot import config, scheduler, tick
+from fantasybot import config, tick
 from fantasybot.storage import to_iso, utcnow
 from tests.support import StorageTestCase
 
@@ -134,21 +134,25 @@ class _Tick(StorageTestCase):
                        "fantasybot.strategy.needs.probable_lineups",
                        "fantasybot.strategy.scouting.probable_lineups"):
             p = mock.patch(target, return_value={})
-            p.start(); self.addCleanup(p.stop)
+            p.start()
+            self.addCleanup(p.stop)
         for target in ("fantasybot.sources.market_trends.trends_index",
                        "fantasybot.agent.trends_index",
                        "fantasybot.strategy.flip.trends_index"):
             p = mock.patch(target, return_value={})
-            p.start(); self.addCleanup(p.stop)
+            p.start()
+            self.addCleanup(p.stop)
         for target in ("fantasybot.sources.matchday.next_kickoff",
                        "fantasybot.sources.matchday.next_gameweek_kickoff",
                        "fantasybot.agent.matchday.next_kickoff",
                        "fantasybot.agent.matchday.next_gameweek_kickoff"):
             p = mock.patch(target, return_value=None)
-            p.start(); self.addCleanup(p.stop)
+            p.start()
+            self.addCleanup(p.stop)
         p = mock.patch("fantasybot.agent.matchday.days_until_matchday",
                        return_value=3.0)
-        p.start(); self.addCleanup(p.stop)
+        p.start()
+        self.addCleanup(p.stop)
 
     def _run(self, client, **kw):
         with mock.patch("fantasybot.api.FantasyClient", lambda: client):

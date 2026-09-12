@@ -5,7 +5,6 @@ never let one broken dependency hide the others, and never take so long that
 Vercel kills it and serves HTML where the panel expects a report.
 """
 
-import time
 import unittest
 from unittest import mock
 

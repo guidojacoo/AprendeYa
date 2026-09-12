@@ -36,7 +36,8 @@ class WarmJob(StorageTestCase):
                        return_value=defaults["next_gameweek_kickoff"]),
         ]
         for p in patches:
-            p.start(); self.addCleanup(p.stop)
+            p.start()
+            self.addCleanup(p.stop)
         ctx = TickContext(budget_seconds=20, log=lambda m: None)
         return tick._execute_warm(ctx, {"payload": {}})
 
