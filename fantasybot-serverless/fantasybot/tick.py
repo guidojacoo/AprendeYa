@@ -483,7 +483,10 @@ def _plan_gap_signings(ctx, lid, team, report):
         # did it, so the task is done — leaving it up would make an autonomous
         # bot look like it was asking for help.
         state.complete_by_key(f"gap:{pos}")
-        why = explain.gap_signing(pos, c, cap)
+        from .strategy.needs import MIN_SQUAD
+        counts = ((report.get("squad") or {}).get("counts") or {})
+        why = explain.gap_signing(pos, c, cap, have=counts.get(pos),
+                                  want=MIN_SQUAD.get(pos))
         queued.append({"pos": pos, "nombre": c.get("nombre"),
                        "max_bid": cap, "prob": c.get("prob"),
                        "closes": c.get("expires"), "why": why})

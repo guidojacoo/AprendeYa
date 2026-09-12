@@ -56,10 +56,25 @@ class Bids(unittest.TestCase):
 class GapSignings(unittest.TestCase):
     def test_it_says_why_profit_is_not_the_point(self):
         got = explain.gap_signing("POR", {"nombre": "Unai", "prob": 85},
-                                  6_000_000)
+                                  6_000_000, have=0, want=2)
         self.assertIn("No tengo ningún POR", got)
         self.assertIn("cuesta puntos", got)
         self.assertIn("85%", got)
+
+    def test_a_squad_that_has_one_is_not_told_it_has_none(self):
+        """A gap means "below the recommended minimum", and the minimum for
+        keepers is two. Saying "no tengo ningún POR" over a squad with a
+        goalkeeper reads as a counting bug — and sent a day into chasing one."""
+        got = explain.gap_signing("POR", {"nombre": "Unai"}, 6_000_000,
+                                  have=1, want=2)
+        self.assertIn("Tengo 1 POR y quiero 2", got)
+        self.assertNotIn("No tengo ningún", got)
+        self.assertIn("recambio", got)
+
+    def test_without_the_count_it_claims_nothing_it_cannot_back(self):
+        got = explain.gap_signing("POR", {"nombre": "Unai"}, 6_000_000)
+        self.assertIn("Me falta un POR", got)
+        self.assertNotIn("No tengo ningún", got)
 
     def test_an_unknown_probability_is_simply_omitted(self):
         got = explain.gap_signing("DEF", {"nombre": "X"}, 1_000_000)

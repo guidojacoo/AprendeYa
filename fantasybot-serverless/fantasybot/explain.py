@@ -78,13 +78,30 @@ def bid(flip, cap, rival_reach=None):
     return _join([head, *why])
 
 
-def gap_signing(pos, cand, cap):
-    """Why we are buying for an empty position, profitable or not."""
+def gap_signing(pos, cand, cap, have=None, want=None):
+    """Why we are buying for a short position, profitable or not.
+
+    It used to open with "No tengo ningún POR" whatever the squad held, because
+    a gap means "below the recommended minimum" and the minimum for keepers is
+    two — not one. So a squad with a goalkeeper was told it had none, and the
+    sentence was read, reasonably, as a bug in the counting rather than in the
+    wording. A claim about the squad now carries the numbers it was made from.
+    """
     name = cand.get("nombre") or "un jugador"
     prob = cand.get("prob")
-    parts = [f"No tengo ningún {pos}, así que ficho a {name}{_upto(cap)}.",
-             "Un hueco en la alineación cuesta puntos todas las jornadas, "
-             "así que aquí no busco margen: busco tapar el agujero."]
+    if have is None:
+        opening = f"Me falta un {pos}, así que ficho a {name}{_upto(cap)}."
+    elif have == 0:
+        opening = f"No tengo ningún {pos}, así que ficho a {name}{_upto(cap)}."
+    else:
+        opening = (f"Tengo {have} {pos} y quiero {want or have + 1}, así que "
+                   f"ficho a {name}{_upto(cap)}.")
+    reason = ("Un hueco en la alineación cuesta puntos todas las jornadas, "
+              "así que aquí no busco margen: busco tapar el agujero."
+              if not have else
+              f"Con {have} me quedo sin recambio si se lesiona o le toca "
+              f"rotación, y un puesto vacío cuesta puntos toda la jornada.")
+    parts = [opening, reason]
     if prob is not None:
         parts.append(f"Tiene {prob}% de ser titular.")
     return _join(parts)

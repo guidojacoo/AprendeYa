@@ -167,7 +167,16 @@ def _sync_tasks(gaps, targets, sells, lineup_changed):
     for pos in ("POR", "DEF", "MED", "DEL"):
         key = f"gap:{pos}"
         if pos in gaps:
-            state.add_task(f"Sign {pos}: you're short in that position.", key=key)
+            # The count, and the target, in the language the page is written in.
+            # "Sign POR: you're short in that position" over a squad holding a
+            # goalkeeper reads as a lie; "Tengo 1 POR, quiero 2" reads as a plan.
+            short = gaps[pos] if isinstance(gaps, dict) else None
+            want = needs_mod.MIN_SQUAD.get(pos)
+            have = (want - short) if (short is not None and want) else None
+            state.add_task(
+                (f"Fichar un {pos}: tengo {have} y quiero {want}."
+                 if have is not None else
+                 f"Fichar un {pos}: voy corto en ese puesto."), key=key)
         else:
             state.complete_by_key(key)
     # buyout targets (and close the ones that no longer apply)
