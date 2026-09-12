@@ -1079,9 +1079,14 @@ def _clock_report(store, source):
     if source == "db" or store.kind != "supabase":
         return None
     try:
-        return store._request("POST", "rpc/fantasybot_clock_status") or None
-    except Exception:                            # noqa: BLE001
-        return None
+        return (store._request("POST", "rpc/fantasybot_clock_status")
+                or {"status": "empty"})
+    except Exception as e:                       # noqa: BLE001
+        # Said out loud rather than swallowed into a null. "No answer" and "the
+        # answer is bad" look identical from the outside, and telling them apart
+        # by redeploying twice is how an evening goes.
+        return {"status": "unavailable",
+                "error": f"{type(e).__name__}: {e}"[:200]}
 
 
 def _heal_scheduler_url(store):
