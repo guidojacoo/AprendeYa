@@ -57,7 +57,8 @@ def main():
         print(f"[X] {e}")
         return 2
 
-    print(f"Project : {config.SUPABASE_URL}")
+    print(f"Project : {store.url}")
+    print(f"Endpoint: {store.rest}")
     print(f"Scope   : {store.scope}\n")
 
     missing = []
@@ -72,6 +73,11 @@ def main():
             print(f"  [MISSING] {table}  ({hint})")
 
     if missing:
+        if len(missing) == len(TABLES):
+            print("\nEVERY table is missing, which usually means one of two things:\n"
+                  "  a) the migration has not been run yet (most likely), or\n"
+                  "  b) SUPABASE_URL points somewhere else — check the 'Endpoint'\n"
+                  "     line above reads https://<ref>.supabase.co/rest/v1 exactly once.")
         print(f"\n{len(missing)} table(s) missing. Run the migration:\n"
               f"  1. Supabase dashboard > SQL Editor > New query\n"
               f"  2. Paste the output of:  python scripts/setup-db.py --print\n"

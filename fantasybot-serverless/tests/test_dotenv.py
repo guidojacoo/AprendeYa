@@ -23,13 +23,12 @@ class LoadDotenv(unittest.TestCase):
     def _load(self, text, env=None):
         """Run the loader against `text` as the project's .env."""
         with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp) / "project"
-            (root / "fantasybot").mkdir(parents=True)
-            (root / ".env").write_text(text, encoding="utf-8")
-            fake_file = str(root / "fantasybot" / "config.py")
+            path = pathlib.Path(tmp) / ".env"
+            path.write_text(text, encoding="utf-8")
             with mock.patch.dict(os.environ, env or {}, clear=True), \
-                 mock.patch.object(config.os.path, "abspath",
-                                   side_effect=lambda p: fake_file):
+                 mock.patch.object(config, "DOTENV_PATH", str(path)), \
+                 mock.patch.object(config, "DOTENV_KEYS", []), \
+                 mock.patch.object(config, "DOTENV_FOUND", False):
                 config._load_dotenv()
                 return dict(os.environ)
 
@@ -83,7 +82,66 @@ class LoadDotenv(unittest.TestCase):
 
     def test_a_missing_file_is_not_an_error(self):
         with tempfile.TemporaryDirectory() as tmp:
-            fake = str(pathlib.Path(tmp) / "fantasybot" / "config.py")
-            with mock.patch.object(config.os.path, "abspath",
-                                   side_effect=lambda p: fake):
-                config._load_dotenv()   # must simply do nothing
+            missing = str(pathlib.Path(tmp) / "nope" / ".env")
+            with mock.patch.object(config, "DOTENV_PATH", missing), \
+                 mock.patch.object(config, "DOTENV_FOUND", False):
+                config._load_dotenv()            # must simply do nothing
+                self.assertFalse(config.DOTENV_FOUND)
+
+    def test_it_records_that_it_found_the_file(self):
+        """The error message a user hits depends on this: "I read this file and
+        it set nothing" is a very different problem from "there is no file"."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / ".env"
+            path.write_text("SUPABASE_URL=https://x.supabase.co\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                 mock.patch.object(config, "DOTENV_PATH", str(path)), \
+                 mock.patch.object(config, "DOTENV_KEYS", []), \
+                 mock.patch.object(config, "DOTENV_FOUND", False):
+                config._load_dotenv()
+                self.assertTrue(config.DOTENV_FOUND)
+                self.assertEqual(config.DOTENV_KEYS, ["SUPABASE_URL"])
+
+    def test_a_utf8_bom_does_not_break_the_first_line(self):
+        """Windows editors love writing a BOM. Without utf-8-sig the first key
+        becomes '\ufeffSUPABASE_URL' and silently never matches."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / ".env"
+            path.write_bytes(b"\xef\xbb\xbfSUPABASE_URL=https://x.supabase.co\n")
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                 mock.patch.object(config, "DOTENV_PATH", str(path)), \
+                 mock.patch.object(config, "DOTENV_KEYS", []), \
+                 mock.patch.object(config, "DOTENV_FOUND", False):
+                config._load_dotenv()
+                self.assertEqual(os.environ.get("SUPABASE_URL"),
+                                 "https://x.supabase.co")
+
+
+class ProjectUrlNormalisation(unittest.TestCase):
+    """Supabase shows both a bare Project URL and a RESTful endpoint with
+    `/rest/v1` already appended. Pasting the second one yields
+    `/rest/v1/rest/v1/...` and a 404 on every table — which looks exactly like a
+    migration that never ran, and sends you debugging the wrong thing."""
+
+    def _rest(self, url):
+        from fantasybot.storage.supabase import _project_url
+        return f"{_project_url(url)}/rest/v1"
+
+    def test_bare_project_url(self):
+        self.assertEqual(self._rest("https://abc.supabase.co"),
+                         "https://abc.supabase.co/rest/v1")
+
+    def test_rest_endpoint_is_accepted_too(self):
+        self.assertEqual(self._rest("https://abc.supabase.co/rest/v1"),
+                         "https://abc.supabase.co/rest/v1")
+
+    def test_trailing_slashes_and_whitespace(self):
+        for raw in ("https://abc.supabase.co/", "  https://abc.supabase.co  ",
+                    "https://abc.supabase.co/rest/v1/", "https://abc.supabase.co/rest"):
+            self.assertEqual(self._rest(raw), "https://abc.supabase.co/rest/v1",
+                             f"failed for {raw!r}")
+
+    def test_empty_stays_empty(self):
+        from fantasybot.storage.supabase import _project_url
+        self.assertEqual(_project_url(""), "")
+        self.assertEqual(_project_url(None), "")

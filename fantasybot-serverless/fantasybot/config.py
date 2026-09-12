@@ -15,6 +15,15 @@ import os
 # where there is no `source .env`.
 
 
+# Where the loader looked, and what it found. Recorded so an error message can
+# name the actual cause ("I looked HERE and there was no file") instead of
+# telling you to set variables you are sure you already set.
+DOTENV_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+DOTENV_FOUND = False
+DOTENV_KEYS: list = []
+
+
 def _load_dotenv():
     """Load `.env` from the project root into os.environ.
 
@@ -23,13 +32,14 @@ def _load_dotenv():
     must never be able to override it — nor a leftover local file silently point
     a production run at a development database.
     """
-    path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    global DOTENV_FOUND
+    path = DOTENV_PATH
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             lines = f.readlines()
     except OSError:
         return          # no .env is the normal case, not a problem
+    DOTENV_FOUND = True
     for line in lines:
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -48,6 +58,7 @@ def _load_dotenv():
             # empty string makes the variable LOOK configured and pushes the
             # failure somewhere far away from the cause.
             continue
+        DOTENV_KEYS.append(key)
         os.environ.setdefault(key, value)
 
 

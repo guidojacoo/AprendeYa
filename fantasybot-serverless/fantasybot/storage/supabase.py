@@ -34,17 +34,46 @@ TIMEOUT = 15
 RETRIES = 2
 
 
+def _project_url(url):
+    """The project base, whichever URL you pasted.
+
+    Supabase shows you a bare "Project URL" and, elsewhere, the RESTful endpoint
+    with `/rest/v1` already on it. Both look like the right thing to copy, and
+    pasting the second one produces `/rest/v1/rest/v1/...` and a 404 on every
+    single table — which reads exactly like "the migration never ran". Cheaper to
+    accept both than to make anyone debug that.
+    """
+    url = (url or "").strip().rstrip("/")
+    for suffix in ("/rest/v1", "/rest"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)].rstrip("/")
+    return url
+
+
 class SupabaseStorage(Storage):
     kind = "supabase"
 
     def __init__(self, url=None, key=None, scope=None):
-        self.url = (url or config.SUPABASE_URL or "").rstrip("/")
+        self.url = _project_url(url or config.SUPABASE_URL)
         self.key = key or config.SUPABASE_SERVICE_ROLE_KEY
         self.scope = scope or config.SCOPE
         if not self.url or not self.key:
+            missing = [n for n, v in (("SUPABASE_URL", self.url),
+                                      ("SUPABASE_SERVICE_ROLE_KEY", self.key))
+                       if not v]
+            if config.DOTENV_FOUND:
+                where = (f"Read {config.DOTENV_PATH} and it set: "
+                         f"{', '.join(config.DOTENV_KEYS) or '(nothing)'}.")
+            else:
+                where = (f"No .env at {config.DOTENV_PATH} — that is where it is "
+                         f"looked for. On Windows check the real filename with "
+                         f"`dir /a` or `Get-ChildItem -Force`: an editor that "
+                         f"saved it as '.env.txt' looks like '.env' in Explorer.")
             raise StorageError(
-                "Supabase storage needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. "
-                "Set them, or set FANTASYBOT_STORAGE=local to use JSON files.")
+                f"Supabase storage needs {' and '.join(missing)}. {where} "
+                f"Blank lines like `KEY=` are skipped on purpose, so a variable "
+                f"left empty counts as unset. Set them in the environment or in "
+                f"that file, or set FANTASYBOT_STORAGE=local to use JSON files.")
         self.rest = f"{self.url}/rest/v1"
 
     # --- HTTP ----------------------------------------------------------------
