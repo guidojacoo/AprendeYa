@@ -223,10 +223,15 @@ def _db_scheduler():
         return FAIL, ("scheduler_config.bot_secret está vacío: la base llama a "
                       "Vercel sin credencial y recibe 401 cada minuto. Recargá "
                       "esta página y la función escribe uno sola.")
+    # A mismatch is NOT a failure: the bot accepts the stored secret as well as
+    # the one in its environment, so the clock works either way. Saying "roto"
+    # here would be the diagnosis crying wolf about the state it is designed to
+    # tolerate — but it is still worth naming, because it means the repair could
+    # not write to the row and a rotation would not take.
+    note = ""
     if config.BOT_CRON_SECRET and stored != config.BOT_CRON_SECRET:
-        return FAIL, ("El secreto de la base no coincide con BOT_CRON_SECRET de "
-                      "Vercel, así que sus llamadas se rechazan. Recargá esta "
-                      "página: la función lo sincroniza sola.")
+        note = ("  (El secreto guardado no es el de BOT_CRON_SECRET; el bot "
+                "acepta los dos, pero no pude sincronizarlos.)")
 
     # The config row existing is NOT the clock running. That distinction cost a
     # night: scheduler_config was there, every check went green, and the cron job
@@ -239,7 +244,8 @@ def _db_scheduler():
         # hand — so it is exactly the piece that ends up missing. Fall back to
         # the evidence that needs nothing installed: the ticks the database
         # actually woke. It answers the real question better anyway.
-        return _clock_by_its_wakes(url)
+        status_txt, detail = _clock_by_its_wakes(url)
+        return status_txt, detail + note
     if not status.get("scheduled"):
         return FAIL, ("La tabla de configuración existe pero EL CRON NO ESTÁ "
                       "CREADO, así que nada despierta al bot desde la base. "
@@ -261,7 +267,7 @@ def _db_scheduler():
                       f"(Vercel > Settings > Deployment Protection), que "
                       f"responde 401 antes de llegar al bot.")
     return OK, (f"La base despierta al bot cada minuto ({runs} veces la última "
-                f"hora, {status.get('http_ok', 0)} respuestas OK).")
+                f"hora, {status.get('http_ok', 0)} respuestas OK)." + note)
 
 
 def _llm():

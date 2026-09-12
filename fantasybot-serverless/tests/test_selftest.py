@@ -214,14 +214,16 @@ class DatabaseClockProbe(StorageTestCase):
         self.assertEqual(status, selftest.WARN)
         self.assertIn("2 veces", detail)
 
-    def test_a_mismatched_secret_is_named_outright(self):
-        """Otherwise the report says "the calls fail" and leaves you comparing
-        two opaque strings by hand, across two web consoles."""
+    def test_a_mismatched_secret_is_named_but_is_not_a_failure(self):
+        """The bot accepts the stored secret as well as its own, so the clock
+        works either way — calling that "roto" is the diagnosis crying wolf
+        about the state it was built to tolerate. It is still named, because it
+        means the repair could not write and a rotation would not take."""
         status, detail = self._probe([{"app_url": "https://real.vercel.app",
                                        "enabled": True,
                                        "bot_secret": "el-viejo"}])
-        self.assertEqual(status, selftest.FAIL)
-        self.assertIn("no coincide", detail)
+        self.assertEqual(status, selftest.OK)
+        self.assertIn("acepta los dos", detail)
 
     def test_an_empty_secret_is_named_outright(self):
         status, detail = self._probe([{"app_url": "https://real.vercel.app",
