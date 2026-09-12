@@ -7,6 +7,7 @@ that does not stop the irreversible half is not a safety switch.
 """
 
 from datetime import timedelta
+from unittest import mock
 
 from fantasybot import config, scheduler, tick
 from fantasybot.scheduler import TickContext
@@ -85,3 +86,46 @@ class PlanningRespectsTheSwitch(_Flags):
             self._set(execute=execute, bids=bids)
             self.assertEqual(tick.bids_allowed(), expected,
                              f"execute={execute} bids={bids}")
+
+
+class DryRunLeavesNothingBehind(_Flags):
+    """`--dry-run` promises "decide everything, send nothing".
+
+    Queuing a bid IS sending something — just later. A dry run that leaves live
+    orders in the queue for the next real tick to execute breaks the one promise
+    the flag makes, and it is the flag you reach for precisely when you do not
+    yet trust the bot.
+    """
+
+    def test_planning_queues_nothing_in_dry_run(self):
+        self._set(execute=True, bids=True)
+        client = FakeClient([])
+        ctx = TickContext(client=client, budget_seconds=15, dry_run=True,
+                          log=lambda m: None)
+        # plan_bids is stubbed: what is under test is that NOTHING is queued,
+        # not how the flip maths works — and the real one scrapes the network.
+        with mock.patch.object(tick.execute_mod, "plan_bids",
+                               return_value=[{"market_id": "m1", "nombre": "X",
+                                              "amount": 1_000_000,
+                                              "margin_pct": 8}]):
+            res = tick._plan_bids(ctx, client, "L", {"teamMoney": 50_000_000},
+                                  {"flips": []})
+        self.assertEqual(res["mode"], "dry-run")
+        self.assertEqual(res["scheduled"], [])
+        self.assertTrue(res["would_bid"], "it should still report the plan")
+        self.assertEqual(self.store.pending_actions(), [],
+                         "a dry run must not leave live orders behind")
+
+    def test_reminders_are_not_queued_in_dry_run(self):
+        report = {"reminders": [
+            {"key": "market_close:x", "fire_at": (utcnow() + timedelta(hours=1))
+             .isoformat(), "event_at": "x", "message": "closing"}]}
+        self.assertEqual(tick._queue_reminders(report, dry_run=True), [])
+        self.assertEqual(self.store.pending_actions(), [])
+
+    def test_reminders_are_queued_for_real_otherwise(self):
+        report = {"reminders": [
+            {"key": "market_close:x", "fire_at": (utcnow() + timedelta(hours=1))
+             .isoformat(), "event_at": "x", "message": "closing"}]}
+        self.assertEqual(tick._queue_reminders(report), ["market_close:x"])
+        self.assertEqual(len(self.store.pending_actions()), 1)

@@ -157,6 +157,11 @@ def _plan_bids(ctx, client, lid, team, report):
     listing, fired seconds before that listing closes.
     """
     mode = setting("bid_mode")
+    if ctx.dry_run:
+        # A dry run must not leave live orders behind. Queuing a bid IS acting —
+        # just later — so it reports the plan and queues nothing.
+        return {"mode": "dry-run", "scheduled": [],
+                "would_bid": execute_mod.plan_bids(client, lid, team)}
     if not bids_allowed():
         # Still report what it WOULD have bid on, so the dashboard shows the
         # thinking while autonomy is off. Nothing is queued, so nothing can fire.
@@ -194,13 +199,15 @@ def _plan_bids(ctx, client, lid, team, report):
     return {"mode": "snipe", "scheduled": scheduled, "skipped": skipped}
 
 
-def _queue_reminders(report):
+def _queue_reminders(report, dry_run=False):
     """Reminders become queued actions so a tick actually fires them on time.
 
     `state.save_reminders` still keeps the list (the CLI's `due` command reads it);
     this just gives each one a deadline the serverless scheduler understands.
     """
     queued = []
+    if dry_run:
+        return queued
     for r in report.get("reminders") or []:
         fire_at = parse_iso(r.get("fire_at"))
         if fire_at is None:
@@ -238,7 +245,7 @@ def run_review(ctx, force=False):
                       if not (config.AUTO_EXECUTE and config.AUTO_LINEUP)
                       else _apply_best_lineup(ctx, client, lid, tid, team))
         bids_res = _plan_bids(ctx, client, lid, team, report)
-        reminders = _queue_reminders(report)
+        reminders = _queue_reminders(report, dry_run=ctx.dry_run)
 
         store.put_doc("last_review_at", to_iso(now))
         store.put_doc("last_report", _summarize(report, lineup_res, bids_res))
