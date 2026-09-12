@@ -29,12 +29,18 @@ _STATE_PATHS = ("SNAPSHOT_PATH", "TASKS_PATH", "REMINDERS_PATH", "BIDS_PATH",
 
 
 class StorageTestCase(unittest.TestCase):
-    """Gives each test its own empty state directory and a clean backend."""
+    """Gives each test its own empty state directory and a clean backend.
+
+    Its own attributes are prefixed (`_saved_local`, `_saved_state`) because a
+    subclass saving its own flags under a plain `self._saved` silently clobbered
+    them — and the damage surfaced in teardown, as an unpacking error miles from
+    the test that caused it. Twice.
+    """
 
     def setUp(self):
         super().setUp()
         self.tmp = tempfile.mkdtemp(prefix="fantasybot-test-")
-        self._saved = (local_mod.STATE_DIR, local_mod.CACHE_DIR,
+        self._saved_local = (local_mod.STATE_DIR, local_mod.CACHE_DIR,
                        local_mod.EVENTS_PATH, dict(local_mod._SPECIAL_PATHS))
         local_mod.STATE_DIR = f"{self.tmp}/.state"
         local_mod.CACHE_DIR = f"{self.tmp}/.cache"
@@ -60,7 +66,7 @@ class StorageTestCase(unittest.TestCase):
         for name, value in self._saved_state.items():
             setattr(state_mod, name, value)
         (local_mod.STATE_DIR, local_mod.CACHE_DIR,
-         local_mod.EVENTS_PATH, local_mod._SPECIAL_PATHS) = self._saved
+         local_mod.EVENTS_PATH, local_mod._SPECIAL_PATHS) = self._saved_local
         storage.reset_storage()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
