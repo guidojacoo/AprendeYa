@@ -110,10 +110,19 @@ jobs:
           FORCE=0; DRY=0
           [ "${FORCE_INPUT:-}" = "true" ] && FORCE=1
           [ "${DRY_INPUT:-}" = "true" ] && DRY=1
+          # A deploy check that does not exercise the deploy is not a check. The
+          # review is where nearly all the code lives, and on its own cadence it
+          # is usually "not due" — so three deploys in a row reported a healthy
+          # tick without the new code having run once. Forced here, the push
+          # answers the only question a deploy raises: does it still work.
+          if [ "$EVENT" = "push" ]; then FORCE=1; fi
 
           BODY="$(call tick)"
           echo "$BODY" | jq -C '{ok, mode, duration_seconds, pending, next_deadline,
                                   sleep_seconds, actions, review: (.review.status // null),
+                                  listed: (.review.listings.listed | length?),
+                                  gaps: (.review.gaps // null),
+                                  skipped_phases: (.review.skipped // null),
                                   clock, error}' 2>/dev/null || echo "$BODY"
 
           # The other clock, reported by the one that woke us. pg_cron cannot tell
