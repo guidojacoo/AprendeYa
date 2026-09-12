@@ -6,6 +6,53 @@ Every shared constant lives here so it isn't repeated across the code. Secrets
 
 import os
 
+# --- .env ---------------------------------------------------------------------
+# Read before anything else, because every constant below is computed from the
+# environment at import time.
+#
+# Shipping a .env.example and then not reading the .env is a trap: the variables
+# look set and nothing uses them. It is also the only way this works on Windows,
+# where there is no `source .env`.
+
+
+def _load_dotenv():
+    """Load `.env` from the project root into os.environ.
+
+    Existing environment variables ALWAYS win. That is the important rule: on
+    Vercel the real environment is the truth, and a stray .env that got bundled
+    must never be able to override it — nor a leftover local file silently point
+    a production run at a development database.
+    """
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return          # no .env is the normal case, not a problem
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):]
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if not key:
+            continue
+        # Strip one layer of matching quotes, the way a shell would.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if not value:
+            # `KEY=` in a template means "not filled in yet". Setting it to an
+            # empty string makes the variable LOOK configured and pushes the
+            # failure somewhere far away from the cause.
+            continue
+        os.environ.setdefault(key, value)
+
+
+_load_dotenv()
+
 # --- LaLiga Fantasy API (unofficial) ---
 API_HOST = "https://fantasy-api.llt-services.com"
 API_BASE = f"{API_HOST}/api"

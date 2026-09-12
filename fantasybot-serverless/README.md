@@ -221,6 +221,17 @@ none set it auto-detects.
 That is also why the CLI did not have to be rewritten: `python -m fantasybot
 agent` on your machine and `/api/tick` in the cloud run the *same* `agent.review()`.
 
+## Tests
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
+The `-t .` is not optional: it makes discovery import `tests/__init__.py`, which
+pins the storage backend to `local`. Without it the suite inherits whatever
+backend the environment (or a `.env`) is configured for — and on a machine set up
+for production that means the tests write to your real database.
+
 ## Disclaimer
 
 **Unofficial API:** LaLiga may change it without notice, and automating the game

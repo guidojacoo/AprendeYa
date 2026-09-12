@@ -350,3 +350,4 @@ ningún servidor — es una limitación de LaLiga, no de este despliegue.
 | `executions` con `status: failed` | mira `.error` en `/api/status` | suele ser token o liga mal configurada |
 | Se pausó Supabase | 7 días sin tocarlo | reactívalo en el dashboard |
 | Puja no ejecutada | el cron no entró en la ventana | sube `MAX_HOLD_SECONDS` o baja el intervalo del cron |
+| `Supabase storage needs SUPABASE_URL...` en local | el `.env` no está en `fantasybot-serverless/`, o la línea está vacía | el loader ignora `KEY=` sin valor a propósito; compruébalo con `python -c "from fantasybot import config; print(config.SUPABASE_URL)"` |
