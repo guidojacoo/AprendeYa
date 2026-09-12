@@ -1143,10 +1143,18 @@ def _note_gap(store):
             return
         gap = (now - prev).total_seconds()
         if gap > SCHEDULER_GAP_ALERT:
+            who = (rows[0].get("trigger") or "?").split(":")[-1]
+            hint = {
+                "github": "Lo está despertando GitHub Actions, que throttlea "
+                          "muchísimo los schedules. Aplicá "
+                          "0003_clock_status.sql para que lo despierte Supabase "
+                          "cada minuto.",
+                "db": "Lo despierta Supabase, pero con huecos: mirá "
+                      "`select public.fantasybot_clock_status();`",
+            }.get(who, "Ningún reloj automático lo despertó; fue a mano.")
             notify.send("scheduler_gap",
-                        f"El bot pasó {gap / 3600:.1f} h sin ejecutarse. "
-                        f"Revisá GitHub Actions: si el repo estuvo 60 días sin "
-                        f"commits, GitHub desactiva el workflow programado.",
+                        f"El bot pasó {gap / 3600:.1f} h sin ejecutarse "
+                        f"(último origen: {who}). {hint}",
                         level="warn")
     except Exception:
         pass

@@ -150,10 +150,25 @@ class DatabaseClockProbe(StorageTestCase):
     pg_net posts to a domain that does not resolve, every minute, forever — and
     the bot is never woken. That must never read as OK."""
 
-    def _probe(self, rows):
-        with mock.patch.object(self.store, "_request", return_value=rows,
-                               create=True),              mock.patch.object(type(self.store), "kind", "supabase"):
-            return selftest._db_scheduler()
+    HEALTHY_CLOCK = {"scheduled": True, "active": True, "runs_last_hour": 59,
+                     "http_ok": 59, "http_failed": 0}
+
+    def _probe(self, rows, clock="healthy"):
+        """`rows` is the scheduler_config row; `clock` is what the database says
+        about the cron JOB. They are independent, which is the whole point."""
+        status = self.HEALTHY_CLOCK if clock == "healthy" else clock
+
+        def fake_request(method, path, params=None, body=None, prefer=None):
+            if path.startswith("rpc/"):
+                if status is None:
+                    raise RuntimeError("function does not exist")
+                return status
+            return rows
+
+        with mock.patch.object(self.store, "_request", fake_request,
+                               create=True):
+            with mock.patch.object(type(self.store), "kind", "supabase"):
+                return selftest._db_scheduler()
 
     def test_the_placeholder_is_a_failure_not_a_pass(self):
         status, detail = self._probe([{"app_url": "https://TU-APP.vercel.app",
@@ -166,7 +181,40 @@ class DatabaseClockProbe(StorageTestCase):
         status, detail = self._probe([{"app_url": "https://real.vercel.app",
                                        "enabled": True}])
         self.assertEqual(status, selftest.OK)
-        self.assertIn("real.vercel.app", detail)
+        self.assertIn("cada minuto", detail)
+        self.assertIn("59", detail, "it should quote how often it actually ran")
+
+    def test_a_config_row_without_a_cron_job_is_a_failure(self):
+        """The row existing is not the clock running. That distinction cost a
+        night: scheduler_config was there, every check went green, and
+        cron.schedule had never been run."""
+        status, detail = self._probe(
+            [{"app_url": "https://real.vercel.app", "enabled": True}],
+            clock={"scheduled": False})
+        self.assertEqual(status, selftest.FAIL)
+        self.assertIn("EL CRON NO ESTÁ CREADO", detail)
+
+    def test_a_cron_that_barely_runs_is_flagged(self):
+        status, detail = self._probe(
+            [{"app_url": "https://real.vercel.app", "enabled": True}],
+            clock={"scheduled": True, "active": True, "runs_last_hour": 2})
+        self.assertEqual(status, selftest.WARN)
+        self.assertIn("2 veces", detail)
+
+    def test_a_cron_whose_calls_all_fail_points_at_the_secret(self):
+        status, detail = self._probe(
+            [{"app_url": "https://real.vercel.app", "enabled": True}],
+            clock={"scheduled": True, "active": True, "runs_last_hour": 60,
+                   "http_ok": 0, "http_failed": 60})
+        self.assertEqual(status, selftest.FAIL)
+        self.assertIn("bot_secret", detail)
+
+    def test_a_missing_status_function_asks_for_the_migration(self):
+        status, detail = self._probe(
+            [{"app_url": "https://real.vercel.app", "enabled": True}],
+            clock=None)
+        self.assertEqual(status, selftest.WARN)
+        self.assertIn("0003", detail)
 
     def test_disabled_is_reported(self):
         status, _ = self._probe([{"app_url": "https://real.vercel.app",

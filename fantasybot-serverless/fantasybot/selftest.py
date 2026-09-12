@@ -185,7 +185,33 @@ def _db_scheduler():
                       f"set app_url = 'https://TU-DOMINIO-REAL.vercel.app';")
     if not url.startswith("https://"):
         return WARN, f"app_url no es https: {url}"
-    return OK, f"La base despierta al bot cada minuto ({url})."
+
+    # The config row existing is NOT the clock running. That distinction cost a
+    # night: scheduler_config was there, every check went green, and the cron job
+    # had never been created — so nothing woke the bot at all. Ask the database
+    # about the JOB, not just the row.
+    try:
+        status = store._request("POST", "rpc/fantasybot_clock_status") or {}
+    except Exception:
+        return WARN, (f"URL correcta ({url}) pero no puedo ver el estado del "
+                      f"cron. Falta aplicar 0003_clock_status.sql.")
+    if not status.get("scheduled"):
+        return FAIL, ("La tabla de configuración existe pero EL CRON NO ESTÁ "
+                      "CREADO, así que nada despierta al bot desde la base. "
+                      "Aplicá supabase/migrations/0003_clock_status.sql.")
+    if not status.get("active"):
+        return FAIL, "El cron existe pero está desactivado (active = false)."
+    runs = status.get("runs_last_hour") or 0
+    failed = status.get("http_failed") or 0
+    if runs < 30:
+        return WARN, (f"El cron está creado pero solo corrió {runs} veces en la "
+                      f"última hora (deberían ser ~60).")
+    if failed and not status.get("http_ok"):
+        return FAIL, (f"El cron corre ({runs}/h) pero las {failed} llamadas a "
+                      f"Vercel fallaron. Revisá que bot_secret coincida con "
+                      f"BOT_CRON_SECRET.")
+    return OK, (f"La base despierta al bot cada minuto ({runs} veces la última "
+                f"hora, {status.get('http_ok', 0)} respuestas OK).")
 
 
 def _llm():
