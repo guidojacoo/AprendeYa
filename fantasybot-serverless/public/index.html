@@ -352,7 +352,11 @@ function render(d){
   $('lineup').innerHTML=f
     ?('<div class="row"><div class="m"><b>'+f.join('-')+'</b>'
       +'<small>'+esc(lr.why||(rep.lineup_changed?'cambiada':'ya era la óptima'))
-      +'</small></div></div>')
+      +'</small></div>'
+      +(rep.xi_points!=null
+        ?'<div class="right"><span class="tag idle">'
+         +esc(Number(rep.xi_points).toFixed(1))+' pts esp.</span></div>':'')
+      +'</div>')
     :'<div class="empty">Todavía sin datos de alineación.</div>';
 
   /* estrategia */
@@ -440,8 +444,10 @@ function render(d){
     ? mk.map(o=>'<details class="why"><summary>'
         +'<span class="score '+scls(o.score)+'">'+esc(o.score)+'</span>'
         +'<span class="grow"><b>'+esc(o.nombre)+'</b>'
-        +'<small>'+esc(o.pos||'?')+' · '+esc(o.via||'')+' · '
-        +esc(o.verdict)+'</small></span>'
+        +'<small>'+esc(o.pos||'?')+' · '+esc(o.via||'')+' · '+esc(o.verdict)
+        +(o.expected_points!=null?' · '+esc(o.expected_points)+' pts/jornada':'')
+        +(o.points_per_million!=null?' · '+esc(o.points_per_million)+' pts/M':'')
+        +'</small></span>'
         +'<span class="num">'+esc(short(o.buy_price))+'</span></summary>'
         +'<ul>'+(o.reasons||[]).map(r=>'<li>'+esc(r)+'</li>').join('')
         +(o.expires_at?'<li>Cierra '+esc(when(o.expires_at,true))+'.</li>':'')

@@ -320,7 +320,7 @@ def _execute_llm(ctx, action):
 def _apply_best_lineup(ctx, client, lid, tid, team):
     from .strategy import lineup as lineup_opt
     premium = agent_mod.league_allows_premium_formations(client, lid)
-    fixture_difficulty = agent_mod.captain_fixture_difficulty(client) if premium else None
+    fixture_difficulty = agent_mod.captain_fixture_difficulty(client)
     try:
         best = lineup_opt.optimize(team, premium=premium,
                                    fixture_difficulty=fixture_difficulty)
@@ -406,6 +406,22 @@ def _plan_bids(ctx, client, lid, team, report):
 MIN_SIGNING_PROB = 40
 
 
+def _points_per_euro(candidate, price):
+    """Expected points per million, the quantity a budget should be spent on.
+
+    A candidate with no probability at all still has to be comparable, or the
+    ranking would silently prefer whoever happens to have data. He is valued at
+    a replacement-level rate instead: the honest reading of "no idea" is "an
+    ordinary player", not "the best available" and not "worthless".
+    """
+    from .strategy.points import DEFAULT_RATE
+
+    expected = candidate.get("expected_points")
+    if expected is None:
+        expected = DEFAULT_RATE * (float(candidate.get("prob") or 50) / 100.0)
+    return expected / max(1.0, price / 1_000_000.0)
+
+
 def _plan_gap_signings(ctx, lid, team, report):
     """Buy a player for a position we have nobody in.
 
@@ -431,7 +447,12 @@ def _plan_gap_signings(ctx, lid, team, report):
     budget = max(0, int(team.get("teamMoney") or 0) - config.CASH_RESERVE)
     queued, skipped, committed = [], [], 0
     for pos in gaps:
-        pick = None
+        # Every candidate that clears the bar, then the best POINTS PER EURO
+        # among them. Filling the slot with the first affordable name spends the
+        # whole budget on one player when two cheaper ones would have scored
+        # more between them — this is a knapsack, and value per euro is the
+        # greedy answer to a knapsack, not a tiebreak bolted on afterwards.
+        eligible = []
         for c in (needs.get("suggestions") or {}).get(pos) or []:
             if c.get("via") not in ("SISTEMA", "PUJA"):
                 continue          # the clause route is planned elsewhere
@@ -443,8 +464,9 @@ def _plan_gap_signings(ctx, lid, team, report):
             cap = int(c.get("max_bid") or c.get("price") or 0)
             if not cap or committed + cap > budget:
                 continue
-            pick = (c, cap)
-            break
+            eligible.append((c, cap))
+        pick = max(eligible, key=lambda e: _points_per_euro(e[0], e[1]),
+                   default=None)
         if pick is None:
             skipped.append({"pos": pos,
                             "why": "no hay ningún titular que entre en la caja"})
@@ -846,6 +868,10 @@ def run_review(ctx, force=False):
         best = None
         try:
             from .strategy import lineup as lineup_opt
+            # Deliberately without the fixture: this XI answers "who are my
+            # regulars" for the selling logic, and a regular with a hard match
+            # this week is still a regular. Tilting it by the opponent would put
+            # a starter on the market because he happens to visit the leaders.
             best = lineup_opt.optimize(team)
         except ValueError:
             pass          # incomplete squad: reserves fall back to squad premiums
@@ -924,6 +950,9 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "money": report.get("money"),
         "matchday": report.get("matchday"),
         "formation": lu.get("formation"),
+        # Now that the XI is built from expected points, its total is a number
+        # that means something on its own: what the eleven should score.
+        "xi_points": lu.get("total"),
         "lineup_changed": bool(lu.get("changed")),
         "lineup_result": lineup_res,
         "gaps": report.get("gaps"),

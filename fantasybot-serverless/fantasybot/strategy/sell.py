@@ -18,12 +18,31 @@ there's no rush to sell a fine, merely-benched squad player.
 
 from ..matching import match_name, POS
 from .lineup import payload_ids
+from . import points as points_mod
 
 FALLING_THRESHOLD = -20  # trend (from futbolfantasy) below which it's "falling"
 LOW_CASH_RATIO = 0.15    # cash below 15% of squad value counts as "thin" (relative to the
                          # squad's own scale — an absolute euro floor is meaningless across
                          # leagues with very different budgets)
 BENCH_PROB_THRESHOLD = 15  # probable-lineup % below which a player "isn't really playing"
+
+# Dead capital: expected points so low that the money he is worth would be doing
+# more in almost anybody else. Both halves have to hold — the points AND the
+# price — because a cheap non-scorer is a fine bench filler and selling him buys
+# nothing, while an expensive one is a fortune sitting still.
+#
+# The old rules could only see a player falling in value or leaving the league.
+# A valuable man who simply never scores was invisible to all of them, and he is
+# exactly the one to sell: he keeps his price, so somebody will pay it.
+DEAD_CAPITAL_POINTS = 1.5      # expected points per gameweek
+DEAD_CAPITAL_VALUE = 4_000_000  # below this his sale changes nothing
+# And he has to be poor WHEN HE PLAYS, not merely out of this week's lineup.
+# Probable-lineup data lags badly for a recent signing — the Aubameyang case in
+# the docstring above — so a player with a good scoring rate showing 3% is a
+# stale feed, not dead capital. Requiring both is what separates them. A player
+# with no scoring history at all falls back to an average rate and is therefore
+# never flagged: no evidence is not evidence of nothing.
+DEAD_CAPITAL_RATE = 3.0
 
 
 def squad_value(team) -> int:
@@ -76,6 +95,11 @@ def sell_candidates(team, best, trends_index, falling_threshold=FALLING_THRESHOL
         trend = match_name(pm.get("nickname", ""), pm.get("name", ""), trends_index)
         tendencia = trend.get("tendencia") if trend else None
         prob = _prob(pm, prob_index) if low_cash else None
+        # Judged on the same expected points the XI is built from, so the squad
+        # is sold by the rule it is picked by. Only with a known probability:
+        # an unmatched name is missing data, not a verdict.
+        known_prob = _prob(pm, prob_index) if prob_index is not None else None
+        expected = points_mod.expected(pm, known_prob)
 
         # out_of_league = the player LEFT LaLiga (transferred abroad). This is an OFFICIAL,
         # data-grounded reason: his fantasy value collapses, so sell REGARDLESS of trend.
@@ -91,6 +115,15 @@ def sell_candidates(team, best, trends_index, falling_threshold=FALLING_THRESHOL
         # uses for spending decisions, so we don't act on a name-match miss.
         elif prob is not None and prob < BENCH_PROB_THRESHOLD:
             reason, prio = f"no juega (prob. titular {prob}%), caja ajustada", 2
+        # Dead capital: he holds his price and gives nothing back. Somebody will
+        # pay that price, and the money plays for us instead of sitting still.
+        elif (expected is not None and expected < DEAD_CAPITAL_POINTS
+                and points_mod.per_start(pm) < DEAD_CAPITAL_RATE
+                and valor >= DEAD_CAPITAL_VALUE):
+            reason = (f"no puntúa para lo que vale ({expected:.1f} pts/jornada "
+                      f"esperados, {points_mod.per_start(pm):.1f} por partido "
+                      f"jugado, con {valor:,} € parados)".replace(",", "."))
+            prio = 3
         else:
             continue  # stable/rising and (playing, or cash is fine) → keep
 

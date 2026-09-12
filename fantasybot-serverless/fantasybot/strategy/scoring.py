@@ -23,10 +23,38 @@ POINTS_WEIGHT = 6.0
 MARGIN_WEIGHT = 1.0
 BASE = 50.0
 
-# What an ordinary starter gives you per gameweek. The question a signing has to
-# answer is not "does he score points" but "does he score more than whoever
-# would play instead", so the expected points are measured against this.
+# What an ordinary starter gives you per gameweek, used when the squad's own
+# baseline is unknown. The question a signing has to answer is never "does he
+# score points" but "does he score more than whoever would play instead" — and
+# when the caller passes the real XI, the man he would actually displace is a
+# far better answer than this average.
 REPLACEMENT_RATE = 3.0
+
+# Slot names in the optimiser's XI, keyed by the position labels a market row
+# carries. Two vocabularies for the same four lines, joined in one place.
+SLOT_BY_POS = {"POR": "goalkeeper", "DEF": "defender",
+               "MED": "midfield", "DEL": "striker"}
+
+
+def replacement_from_xi(best):
+    """{POR/DEF/MED/DEL: expected points of the WEAKEST starter in that line}.
+
+    The weakest, not the average: he is the one a signing would actually push
+    out of the XI, so he is what the signing has to beat. Beating the line's
+    average only means finishing mid-table in your own team.
+    """
+    if not best:
+        return {}
+    out = {}
+    for pos, slot in SLOT_BY_POS.items():
+        entries = best.get(slot)
+        if entries is None:
+            continue
+        entries = entries if isinstance(entries, list) else [entries]
+        scores = [e.get("score") for e in entries if e and e.get("score") is not None]
+        if scores:
+            out[pos] = min(scores)
+    return out
 
 VERDICTS = ((70, "comprar"), (58, "interesante"), (45, "regular"))
 
@@ -35,7 +63,7 @@ def _clamp(n, low=0.0, high=100.0):
     return max(low, min(high, n))
 
 
-def score(op, prob=None, money=None):
+def score(op, prob=None, money=None, replacement=None):
     """Score one evaluated listing. `op` is a row from strategy.flip.evaluate.
 
     Affordability deliberately does NOT move the score: a good player you cannot
@@ -67,13 +95,23 @@ def score(op, prob=None, money=None):
     rate = points_mod.per_start({"averagePoints": op.get("avg_points"),
                                  "points": op.get("season_points"),
                                  "lastSeasonPoints": op.get("last_season_points")})
+    baseline = (replacement or {}).get(op.get("pos"))
+    against = baseline if baseline is not None else REPLACEMENT_RATE
+    exp = None
     if prob is not None:
         exp = prob / 100.0 * rate
-        weighed.append(((exp - REPLACEMENT_RATE) * POINTS_WEIGHT,
-                        f"Esperaría {exp:.1f} puntos por jornada de él "
-                        f"({prob:.0f}% de titularidad × {rate:.1f} puntos por "
-                        f"partido jugado); un titular corriente da "
-                        f"{REPLACEMENT_RATE:.0f}."))
+        gained = exp - against
+        why = (f"Esperaría {exp:.1f} puntos por jornada de él "
+               f"({prob:.0f}% de titularidad × {rate:.1f} puntos por partido "
+               f"jugado)")
+        if baseline is not None:
+            why += (f"; el peor de mi línea de {op.get('pos')} da "
+                    f"{baseline:.1f}, así que el once "
+                    + (f"sube {gained:.1f}." if gained > 0
+                       else f"no mejora ({gained:.1f})."))
+        else:
+            why += f"; un titular corriente da {against:.0f}."
+        weighed.append((gained * POINTS_WEIGHT, why))
     else:
         weighed.append((0, f"Sin dato de alineación probable: hace "
                            f"{rate:.1f} puntos por partido cuando juega, pero "
@@ -94,14 +132,32 @@ def score(op, prob=None, money=None):
     price = int(op.get("buy_price") or 0)
     affordable = money is None or price <= int(money)
     reasons = [text for _, text in weighed]
+    # Held by name rather than read back as reasons[-1]: another line is appended
+    # after it, and "the last reason" silently stopped being "the money" the
+    # moment that happened.
+    money_reason = (f"No alcanza la caja: pide {_money(price)} y hay "
+                    f"{_money(money)}.")
     if not affordable:
-        reasons.append(f"No alcanza la caja: pide {_money(price)} y hay "
-                       f"{_money(money)}.")
+        reasons.append(money_reason)
+
+    # What a euro buys, which is the quantity a finite budget is spent on: two
+    # decent signings can beat one expensive one, and only this number says so.
+    # It is reported rather than folded into the score — the score answers "is he
+    # good", the spending logic answers "what do I buy with what I have", and
+    # blurring them would double-count the price against the margin.
+    per_million = (round(exp / max(1.0, price / 1_000_000.0), 2)
+                   if exp is not None and price else None)
+    if per_million is not None:
+        reasons.append(f"{per_million} puntos por millón "
+                       f"({_money(price / max(exp, 0.1))} por punto esperado).")
 
     verdict = _verdict(total, affordable)
     return {**op, "score": total, "affordable": affordable,
             "verdict": verdict, "prob": prob, "reasons": reasons,
-            "headline": _headline(weighed, verdict, reasons[-1], affordable)}
+            "expected_points": round(exp, 2) if exp is not None else None,
+            "points_per_million": per_million,
+            "headline": _headline(weighed, verdict, money_reason,
+                                  affordable)}
 
 
 def _headline(weighed, verdict, money_reason, affordable):
@@ -133,7 +189,7 @@ def _money(n):
         return "?"
 
 
-def rank(ops, prob_index=None, money=None, limit=None):
+def rank(ops, prob_index=None, money=None, limit=None, replacement=None):
     """Score every listing, best first. Ties break on the cheaper one."""
     from ..matching import match_name
 
@@ -145,6 +201,7 @@ def rank(ops, prob_index=None, money=None, limit=None):
                                prob_index)
             if entry:
                 prob = entry.get("prob")
-        out.append(score(op, prob=prob, money=money))
+        out.append(score(op, prob=prob, money=money,
+                         replacement=replacement))
     out.sort(key=lambda r: (-r["score"], r.get("buy_price") or 0))
     return out[:limit] if limit else out

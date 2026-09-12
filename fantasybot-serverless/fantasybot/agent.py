@@ -247,7 +247,11 @@ def review(client, days_to_matchday=None):
     # must not crash the whole review: report it and carry on so gaps/needs still fire.
     try:
         premium = league_allows_premium_formations(client, lid)
-        fixture_difficulty = captain_fixture_difficulty(client) if premium else None
+        # Computed for every league now, not only premium ones. It used to feed
+        # the captain alone — a premium feature — so a league without it threw
+        # the fixture away and fielded the same XI against the leaders as
+        # against the bottom club.
+        fixture_difficulty = captain_fixture_difficulty(client)
         best = lineup_opt.optimize(team, prob_index, premium=premium,
                                    fixture_difficulty=fixture_difficulty)
         best_ids = lineup_opt.payload_ids(best)
@@ -269,7 +273,12 @@ def review(client, days_to_matchday=None):
     flips = [o for o in ops
              if o["margin_pct"] > 0 and o["buy_price"] <= team["teamMoney"]][:5]
     market = scoring.rank(ops, prob_index=prob_index, money=team["teamMoney"],
-                          limit=40)
+                          limit=40,
+                          # Judged against the man he would actually push out of
+                          # the XI, not against an abstract average. "Mejor que
+                          # un titular corriente" is not a reason to sign
+                          # somebody when your own line is already better.
+                          replacement=scoring.replacement_from_xi(best))
     gaps = needs_mod.gaps(team)
     needs_report = needs_mod.advise(client, lid, team, days_to_matchday)
     # A missing lineup (incomplete squad) only skips the lineup itself — sells, flips,

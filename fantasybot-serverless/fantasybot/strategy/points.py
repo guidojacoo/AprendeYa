@@ -32,6 +32,20 @@ SEASON_MATCHES = 38
 # supports when there is none about the scoring itself.
 DEFAULT_RATE = 3.0
 
+# How much the rival he faces this week moves his points, by position.
+#
+# A goalkeeper's afternoon is decided almost entirely by whether his team keeps a
+# clean sheet, and that depends far more on who they are playing than on him. A
+# striker facing the same opponent still takes his chances. So the opponent is
+# worth more to a keeper than to a forward, and one flat adjustment for everyone
+# would be wrong in both directions at once.
+#
+# This is the clean-sheet effect, reached through the door the data actually
+# opens: his own team's defensive quality is already inside his points-per-match
+# rate, so all that is missing is who he is up against this week.
+FIXTURE_WEIGHT = {1: 0.40, 2: 0.35, 3: 0.25, 4: 0.18}
+DEFAULT_FIXTURE_WEIGHT = 0.25
+
 
 def games_played(pm):
     """Appearances, derived rather than requested.
@@ -67,7 +81,26 @@ def per_start(pm):
     return avg * weight + last * (1 - weight)
 
 
-def expected(pm, prob_pct):
+def fixture_factor(pm, difficulty):
+    """How much easier or harder than average this week's opponent makes it.
+
+    `difficulty` is 0..1 — 0 the league's weakest squad, 1 the strongest (see
+    captain.fixture_difficulty_by_team). Absent or unknown means neutral, never
+    a penalty: a missing fixture must leave the estimate exactly where it was,
+    or a gameweek the calendar has not published yet quietly benches the squad.
+    """
+    if difficulty is None or isinstance(difficulty, bool):
+        return 1.0
+    try:
+        d = float(difficulty)
+    except (TypeError, ValueError):
+        return 1.0
+    weight = FIXTURE_WEIGHT.get(int(pm.get("positionId") or 0),
+                                DEFAULT_FIXTURE_WEIGHT)
+    return max(0.1, 1.0 + weight * (1.0 - 2.0 * min(1.0, max(0.0, d))))
+
+
+def expected(pm, prob_pct, difficulty=None):
     """Expected points for one gameweek. `prob_pct` is 0-100, or None for "no idea".
 
     None means no data, not zero: treating an unknown as a certainty in either
@@ -76,4 +109,5 @@ def expected(pm, prob_pct):
     """
     if prob_pct is None:
         return None
-    return max(0.0, float(prob_pct)) / 100.0 * per_start(pm)
+    return (max(0.0, float(prob_pct)) / 100.0 * per_start(pm)
+            * fixture_factor(pm, difficulty))

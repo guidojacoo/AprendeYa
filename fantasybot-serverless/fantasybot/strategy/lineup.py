@@ -66,7 +66,7 @@ DOUBTFUL_DISCOUNT = 0.6  # a 'duda' usually plays: rank below a fit player, ABOV
 _DOUBTFUL_STATUS = ("doubtful", "duda", "warned")
 
 
-def player_score(player, prob_index):
+def player_score(player, prob_index, fixture_difficulty=None):
     """Expected points for one gameweek. Returns (score, prob, disponible, tag).
 
     This was `probabilidad + 0.5 × media`, which on a 0-100 probability scale
@@ -114,7 +114,12 @@ def player_score(player, prob_index):
         # separate quantities instead of one blended number.
         chance *= DOUBTFUL_DISCOUNT
         tag = "doubtful"
-    return (points_mod.expected(pm, chance) or 0.0), prob, disponible, tag
+    # Who he is up against this week. A keeper's afternoon turns on it far more
+    # than a striker's, which is what makes it worth carrying this far down.
+    team_id = (pm.get("team") or {}).get("id")
+    difficulty = ((fixture_difficulty or {}).get(str(team_id))
+                  if team_id is not None else None)
+    return (points_mod.expected(pm, chance, difficulty) or 0.0), prob, disponible, tag
 
 
 def _pid(player):
@@ -226,7 +231,7 @@ def optimize(team, prob_index=None, premium=False, fixture_difficulty=None):
         pos = POS.get(p["playerMaster"]["positionId"])
         if pos not in by_pos:   # unknown position OR a coach ("ENT"): never an XI line
             continue
-        score, prob, disp, tag = player_score(p, prob_index)
+        score, prob, disp, tag = player_score(p, prob_index, fixture_difficulty)
         entry = _entry(p, score, prob, disp, tag)
         by_pos[pos].append(entry)
         if tag == "not_in_xi" and (entry["valor"] or 0) >= 8_000_000:
