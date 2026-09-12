@@ -120,6 +120,8 @@ jobs:
           BODY="$(call tick)"
           echo "$BODY" | jq -C '{ok, mode, duration_seconds, pending, next_deadline,
                                   sleep_seconds, actions, review: (.review.status // null),
+                                  review_seconds: .review.seconds?,
+                                  review_skipped: .review.skipped?,
                                   listings: {mode: .review.listings.mode?,
                                              listed: (.review.listings.listed | length?),
                                              would: (.review.listings.would_list | length?),
