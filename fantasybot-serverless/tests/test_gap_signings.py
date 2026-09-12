@@ -35,7 +35,7 @@ class GapSignings(StorageTestCase):
 
     def _plan(self, cands, money=50_000_000, gaps=("POR",)):
         ctx = TickContext(budget_seconds=20, log=lambda m: None)
-        report = {"needs": {"gaps": {p: 1 for p in gaps},
+        report = {"needs": {"gaps": dict.fromkeys(gaps, 1),
                             "suggestions": {gaps[0]: cands}}}
         return tick._plan_gap_signings(ctx, "L1", {"teamMoney": money}, report)
 
