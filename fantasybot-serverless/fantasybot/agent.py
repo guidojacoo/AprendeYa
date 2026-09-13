@@ -465,6 +465,15 @@ def review(client, days_to_matchday=None):
         "squad": _squad_census(team, market),
         "needs": needs_report,
         "sells": sells,
+        # What each of ours is worth to the XI, keyed by roster slot. Built for
+        # the defence: "who should I protect" and "who should I sell" are the
+        # same question asked in opposite directions, and answering them in the
+        # same currency — points per gameweek — is what stops the bot spending
+        # money to defend a bench player it was about to list anyway.
+        "points_at_risk": {r["player_team_id"]: r["loss"]
+                           for r in upgrades.sellable(
+                               team, prob_index=prob_index,
+                               fixture_difficulty=fixture_difficulty)},
         "clause_targets": targets,
         "rivals": rivals_list,
         "reminders": reminders,

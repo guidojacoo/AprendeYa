@@ -46,6 +46,7 @@ def _status(handler):
             # nothing can ever sell, and the page showed no way to find that out.
             "list": config.AUTO_LIST,
             "shield": config.AUTO_SHIELD,
+            "raise_clause": config.AUTO_RAISE_CLAUSE,
             "matchday": config.AUTO_MATCHDAY_LINEUP,
         },
         "last_execution": last,

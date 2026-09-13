@@ -130,6 +130,13 @@ def _int(name, default):
         return default
 
 
+def _float(name, default):
+    try:
+        return float(_env(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 # --- storage backend ---------------------------------------------------------
 SUPABASE_URL = (_env("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = _env("SUPABASE_SERVICE_ROLE_KEY")
@@ -240,15 +247,26 @@ CLOCK_INTERVAL_SECONDS = _int("FANTASYBOT_CLOCK_INTERVAL", 60)
 AUTO_EXECUTE = _flag("FANTASYBOT_AUTO_EXECUTE", True)
 AUTO_LINEUP = _flag("FANTASYBOT_AUTO_LINEUP", True)
 AUTO_BIDS = _flag("FANTASYBOT_AUTO_BIDS", True)
+# Raising a clause is the only defensive move that lasts. It spends real money,
+# so it gets its own switch — but it is ON by default, because a squad whose
+# clauses anyone can pay is a squad that gets taken apart by anybody paying
+# attention, and that decides more leagues than any signing does.
+AUTO_RAISE_CLAUSE = _flag("FANTASYBOT_AUTO_RAISE_CLAUSE", True)
 # Pay a rival's buyout clause the moment it unlocks. This is the single biggest
 # source of value in the game and the only genuinely irreversible spend the bot
 # makes, so it is off until you turn it on — and it is fenced by CASH_RESERVE and
 # MAX_CLAUSE below.
-AUTO_CLAUSES = _flag("FANTASYBOT_AUTO_CLAUSES", False)
+# It is ON now. A bot that never pays a clause is playing without the strongest
+# move on the board while every attentive rival uses it — and the brief is to
+# win, not to end the season solvent and fourth. The fences below are what make
+# that safe: never past the reserve, never past MAX_CLAUSE, and never more than
+# MAX_CLAUSE_SHARE of the balance on one player.
+AUTO_CLAUSES = _flag("FANTASYBOT_AUTO_CLAUSES", True)
 # Shield our own most clause-vulnerable player. Free (a rewarded-ad flow) and
-# purely defensive. Off by default only because LaLiga's shield PUT format is
-# noted in api.py as not yet confirmed against a live account.
-AUTO_SHIELD = _flag("FANTASYBOT_AUTO_SHIELD", False)
+# purely defensive. It was off while the shield call was unconfirmed; live runs
+# have since shown the shields landing in LaLiga's own activity feed, so the
+# reason to keep a free defensive move switched off is gone.
+AUTO_SHIELD = _flag("FANTASYBOT_AUTO_SHIELD", True)
 # Re-optimise the XI before each kickoff. Players lock when THEIR match starts,
 # not when the gameweek does, so a Sunday striker can still be swapped on
 # Saturday night — this is free points that an hourly cadence alone misses.
@@ -278,8 +296,14 @@ LLM_MAX_TOKENS = _int("LLM_MAX_TOKENS", 1500)
 # balance below this is refused: being unable to answer the next opportunity is
 # itself a cost, and an empty account cannot bid at a market close.
 CASH_RESERVE = _int("FANTASYBOT_CASH_RESERVE", 0)
-# Hard ceiling on a single buyout clause. 0 means no ceiling beyond the balance.
+# Hard ceiling on a single buyout clause, in euros. 0 means no fixed ceiling.
 MAX_CLAUSE = _int("FANTASYBOT_MAX_CLAUSE", 0)
+# The fence that does not go stale. A euro ceiling set in August is meaningless
+# by November, when the bank has tripled — so the real limit is a SHARE of the
+# balance: one player may never take more than this much of what we have. At
+# 0.60 a clause can still be the biggest move of the season and there is always
+# something left to answer the next one with. 1.0 disables it.
+MAX_CLAUSE_SHARE = _float("FANTASYBOT_MAX_CLAUSE_SHARE", 0.60)
 # How early (minutes) before a kickoff to re-optimise the lineup.
 LINEUP_LEAD_MINUTES = _int("FANTASYBOT_LINEUP_LEAD_MINUTES", 25)
 # Pages of league activity to walk per review while backfilling history. Small

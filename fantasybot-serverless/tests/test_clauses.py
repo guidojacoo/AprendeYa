@@ -57,6 +57,15 @@ class Paying(StorageTestCase):
         (config.AUTO_CLAUSES, config.AUTO_EXECUTE,
          config.CASH_RESERVE, config.MAX_CLAUSE) = self._flags
 
+    def test_the_share_is_re_checked_when_the_money_actually_moves(self):
+        """The balance moves between the plan and the payment — we win a bid, a
+        clause is paid — and this is the last point at which refusing is free."""
+        client = ClauseClient(money=12_000_000, clause=10_000_000)
+        res = self._run(client, max_pay=11_000_000)
+        self.assertEqual(res["status"], "too_expensive")
+        self.assertEqual(client.paid, [],
+                         "10M of a 12M balance leaves nothing to play with")
+
     def _run(self, client, max_pay=22_000_000):
         unlock = utcnow() - timedelta(seconds=5)
         scheduler.schedule(
@@ -186,6 +195,14 @@ class Planning(StorageTestCase):
         self.assertEqual(self._plan(self._target())["queued"], [])
 
     def test_the_allowance_never_exceeds_what_we_can_afford(self):
-        self._plan(self._target(clause=10_000_000), money=10_400_000)
+        self._plan(self._target(clause=10_000_000), money=17_000_000)
         self.assertEqual(self.store.pending_actions()[0]["payload"]["max_pay"],
-                         10_400_000)
+                         int(17_000_000 * config.MAX_CLAUSE_SHARE))
+
+    def test_one_player_cannot_take_most_of_the_bank(self):
+        """A euro ceiling set in August is meaningless by November, so the real
+        limit is a share. Paying 96% of the balance for one player does not buy
+        a player — it costs the next two, because nothing is left to answer
+        with."""
+        res = self._plan(self._target(clause=10_000_000), money=10_400_000)
+        self.assertEqual(res["queued"], [])

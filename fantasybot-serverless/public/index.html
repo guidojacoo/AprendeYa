@@ -229,6 +229,7 @@
       <section><h2>Oportunidades de compra</h2><div class="scroll" id="flips"></div></section>
       <section><h2>Cláusulas programadas</h2><div id="clauses"></div></section>
       <section><h2>Blindaje</h2><div id="shield"></div></section>
+      <section><h2>Quién te pueden robar</h2><div class="scroll" id="defense"></div></section>
       <section><h2>Mi plantilla en venta</h2><div class="scroll" id="listings"></div></section>
     </div>
 
@@ -396,6 +397,33 @@ function render(d){
       +esc(cand.nombre)+'</b><small>'+esc(cand.reason||'')+'</small></div>'
       +'<div class="right">'+esc(short(cand.clause))+'</div></div>')
     :'<div class="empty">Ningún jugador tuyo está en riesgo ahora.</div>';
+
+  /* ---- quién te pueden robar (cláusulas) ---- */
+  const df=rep.defense||{}, exp=df.exposed||[], raised=df.raises||[];
+  const raisedBy={}; raised.forEach(r=>raisedBy[r.player_team_id]=r);
+  $('defense').innerHTML=exp.length
+    ?('<div class="row"><div class="m">Caja del rival más rico'
+      +'<small>cualquier cláusula por debajo de esto es alcanzable</small></div>'
+      +'<div class="right"><span class="num">'+esc(short(df.rival_reach||0))
+      +'</span></div></div>'
+      +(df.mode==='probe'
+        ?'<div class="row"><span class="tag warn">midiendo</span><div class="m">'
+         +'Todavía no sé cuánto cuesta subir una cláusula. Hago una subida chica '
+         +'para medirlo y después defiendo en serio.</div></div>':'')
+      +(df.mode==='waiting'
+        ?'<div class="row"><span class="tag idle">esperando</span><div class="m">'
+         +esc(df.why||'')+'</div></div>':'')
+      +exp.map(r=>{
+        const up=raisedBy[r.player_team_id];
+        return '<div class="row"><span class="tag '+(up?'ok':'warn')+'">'
+          +(up?'subida a '+short(up.target):'expuesto')+'</span>'
+          +'<div class="m"><b>'+esc(r.nombre)+'</b> <span class="k">'+esc(r.pos)+'</span>'
+          +'<small>cláusula '+esc(short(r.clause))+' · pierdo '
+          +esc(r.points_at_risk)+' pts/jornada si me lo llevan'
+          +(up&&up.cost?' · cuesta '+short(up.cost):'')+'</small></div>'
+          +'<div class="right">'+esc(short(r.value))+'</div></div>';
+      }).join(''))
+    :'<div class="empty">Ninguna cláusula tuya está al alcance de la liga.</div>';
 
   list($('tasks'),rep.tasks,t=>
     '<div class="row"><div class="k">#'+esc(t.id)+'</div><div class="m">'+esc(t.text)
@@ -665,6 +693,7 @@ function render(d){
     +flag('Pone la plantilla en venta',a.list)
     +flag('Pujas automáticas',a.bids)+flag('Vende con oferta buena',a.sells)
     +flag('Paga cláusulas',a.clauses)+flag('Blinda jugadores',a.shield)
+    +flag('Sube cláusulas para protegerse',a.raise_clause)
     +flag('Realinea antes de cada partido',a.matchday)
     +'<div class="row"><div class="m">LLM</div><div class="right">'
     +(llm.enabled?('<span class="tag ok">'+esc(llm.model||'on')+'</span>')

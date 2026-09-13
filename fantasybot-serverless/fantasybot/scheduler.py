@@ -40,6 +40,7 @@ LLM_STRATEGY = "llm_strategy"  # the strategic pass (costs tokens)
 LIST_SQUAD = "list_squad"   # put one player on the market at his reserve price
 CLAUSE = "clause"           # pay a rival's buyout clause the second it unlocks
 SHIELD = "shield"           # protect one of ours from being claused
+RAISE_CLAUSE = "raise_clause"  # put one of ours permanently out of a rival's reach
 WARM = "warm_sources"       # refresh the scraped caches, alone and unhurried
 
 _EXECUTORS: dict[str, Callable] = {}

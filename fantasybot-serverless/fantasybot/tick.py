@@ -31,6 +31,7 @@ from . import state
 from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
                         TickContext)
 from .matching import num
+from .strategy import clausedefense as clausedef
 from .strategy import upgrades as upgrades_mod
 from .storage import (DONE, FAILED, RUNNING, get_storage, parse_iso, to_iso,
                       utcnow)
@@ -40,7 +41,8 @@ REVIEW_LOCK = "review"
 # The phases that put money to work. Dropping any of these for time is not the
 # same as dropping `sources` — it is a review that did all the thinking and none
 # of the acting, so it earns itself a second attempt a couple of minutes later.
-_SPENDING_PHASES = ("gap_signings", "listings", "bids", "clauses")
+_SPENDING_PHASES = ("gap_signings", "listings", "bids", "clauses",
+                    "clause_defense")
 
 # Runtime knobs that live in the DB (settings table) and fall back to env config,
 # so cadence can be retuned from the dashboard without a redeploy.
@@ -231,6 +233,14 @@ def _execute_clause(ctx, action):
                 "unlocks_at": to_iso(unlock_at)}
 
     money = int(num(team.get("teamMoney")))
+    if 0 < config.MAX_CLAUSE_SHARE < 1 and current > money * config.MAX_CLAUSE_SHARE:
+        # Re-checked HERE, not only where it was queued. The balance moves
+        # between the plan and the payment, and this is the last point at which
+        # refusing still costs nothing.
+        return {"status": "too_expensive", "nombre": nombre, "clause": current,
+                "share_limit": int(money * config.MAX_CLAUSE_SHARE),
+                "reason": f"{current:,} is over {config.MAX_CLAUSE_SHARE:.0%} "
+                          f"of a {money:,} balance"}
     if money - current < config.CASH_RESERVE:
         return {"status": "insufficient_funds", "nombre": nombre,
                 "clause": current, "money": money,
@@ -272,6 +282,91 @@ def _execute_shield(ctx, action):
                         f"(cláusula {int(p.get('clause') or 0):,} €)",
                 detail={"value": p.get("value"), "reason": p.get("reason")})
     return {"status": "shielded", "nombre": p.get("nombre"), "response": resp}
+
+
+def _raise_brief(p):
+    return {"nombre": p.get("nombre"), "target": p.get("target"),
+            "clause": p.get("clause"), "why": p.get("why")}
+
+
+def _clause_cost_ratio():
+    """What a euro of clause costs us, as measured in production. None until then."""
+    try:
+        doc = get_storage().get_doc("clause_cost_ratio", {}) or {}
+        ratio = doc.get("ratio")
+        return float(ratio) if ratio else None
+    except Exception:                            # noqa: BLE001
+        return None
+
+
+@scheduler.executor(scheduler.RAISE_CLAUSE)
+def _execute_raise_clause(ctx, action):
+    """Put one of ours permanently out of reach — and learn what that cost.
+
+    The endpoint returns the new clause, never the bill, so the money before and
+    after IS the measurement. It is banked the first time a raise lands, and
+    every later decision is priced with it instead of the deliberately pessimistic
+    assumption the first one had to use.
+    """
+    p = action.get("payload") or {}
+    if not (config.AUTO_RAISE_CLAUSE and config.AUTO_EXECUTE):
+        return {"status": "skipped", "reason": "AUTO_RAISE_CLAUSE is off"}
+    if ctx.dry_run:
+        return {"status": "skipped", "reason": "dry run", **_raise_brief(p)}
+    client = ctx.get_client()
+    lid, tid = league_ids(client)
+    pid = p.get("player_id")
+    target = int(num(p.get("target")))
+
+    # Re-read before spending: the clause rises on its own with the player's
+    # value, so the target we computed an hour ago may already be met, and the
+    # balance may have gone into a bid since.
+    team = client.team(lid, tid)
+    before_money = int(num(team.get("teamMoney")))
+    live = None
+    for row in team.get("players") or []:
+        if str((row.get("playerMaster") or {}).get("id")) == str(pid):
+            live = row
+            break
+    if live is None:
+        return {"status": "gone", "nombre": p.get("nombre"),
+                "reason": "ya no está en la plantilla"}
+    before_clause = int(num(live.get("buyoutClause")))
+    if before_clause >= target:
+        return {"status": "already_safe", "nombre": p.get("nombre"),
+                "clause": before_clause, "target": target}
+
+    ratio = _clause_cost_ratio()
+    cost = clausedef.cost_of(before_clause, target, ratio)
+    if cost > before_money - config.CASH_RESERVE:
+        return {"status": "too_expensive", "nombre": p.get("nombre"),
+                "cost": cost, "money": before_money}
+
+    resp = client.increase_buyout_clause(lid, pid, target)
+
+    # What it actually cost. Read from the account, not from the response.
+    after = client.team(lid, tid)
+    after_money = int(num(after.get("teamMoney")))
+    after_clause = before_clause
+    for row in after.get("players") or []:
+        if str((row.get("playerMaster") or {}).get("id")) == str(pid):
+            after_clause = int(num(row.get("buyoutClause")))
+            break
+    measured = clausedef.measure_ratio(before_money, after_money,
+                                       before_clause, after_clause)
+    if measured is not None and ratio is None:
+        get_storage().put_doc("clause_cost_ratio", {"ratio": measured,
+                                                    "at": to_iso(utcnow()),
+                                                    "from": p.get("nombre")})
+    paid = before_money - after_money
+    events.emit("note", f"Cláusula de {p.get('nombre')} subida a {after_clause:,} €",
+                detail={"antes": f"{before_clause:,} €",
+                        "pagado": f"{paid:,} €",
+                        "why": p.get("why"),
+                        "coste por € de cláusula": measured or "no medible"})
+    return {"status": "raised", "nombre": p.get("nombre"),
+            "clause": after_clause, "previous": before_clause,
+            "paid": paid, "measured_ratio": measured, "response": resp}
 
 
 @scheduler.executor(scheduler.LIST_SQUAD)
@@ -583,10 +678,15 @@ def _plan_clauses(ctx, lid, team, report):
     targets = report.get("clause_targets") or []
     if not targets:
         return {"mode": "on" if config.AUTO_CLAUSES else "off", "queued": []}
-    money = int(team.get("teamMoney") or 0)
+    money = int(num(team.get("teamMoney")))
     spendable = max(0, money - config.CASH_RESERVE)
     if config.MAX_CLAUSE:
         spendable = min(spendable, config.MAX_CLAUSE)
+    # The fence that does not go stale. One player may never take more than this
+    # share of the balance: a clause big enough to leave us unable to answer the
+    # next one has cost us two players, not bought one.
+    if 0 < config.MAX_CLAUSE_SHARE < 1:
+        spendable = min(spendable, int(money * config.MAX_CLAUSE_SHARE))
 
     queued, skipped = [], []
     for t in targets:
@@ -634,6 +734,50 @@ def _target_brief(t):
     return {"player_id": t.get("player_id"), "nombre": t.get("nombre"),
             "pos": t.get("pos"), "clause": t.get("clause"),
             "prob": t.get("prob")}
+
+
+def _plan_clause_defense(ctx, lid, team, report):
+    """Raise the clauses that a rival could actually pay.
+
+    The shield patches one weekend; this is what stops the problem coming back
+    every week until somebody finally takes the player. It spends real money, so
+    it is fenced three ways: only players whose loss costs real points, only a
+    share of free cash, and only at a price we have MEASURED rather than guessed.
+    """
+    if not (config.AUTO_RAISE_CLAUSE and config.AUTO_EXECUTE) or ctx.dry_run:
+        return {"mode": "off", "raises": []}
+    rivals = report.get("rivals") or []
+    if any(r.get("partial_history") for r in rivals):
+        # The reach estimate is built from transactions we have not finished
+        # reading. Defending against a number that is still climbing means
+        # paying twice for the same protection.
+        return {"mode": "waiting", "raises": [],
+                "why": "todavía estoy reconstruyendo la caja de los rivales"}
+    reach = max(((r.get("cash") or 0) for r in rivals if not r.get("is_me")),
+                default=0)
+    got = clausedef.plan(team, reach, num(team.get("teamMoney")),
+                         report.get("points_at_risk") or {},
+                         cost_ratio=_clause_cost_ratio(),
+                         reserve=config.CASH_RESERVE)
+    queued = []
+    for r in got.get("raises") or []:
+        try:
+            scheduler.schedule(
+                scheduler.RAISE_CLAUSE, {"league_id": lid, **r},
+                execute_at=utcnow(),
+                # Once per player per day: the clause only needs raising again
+                # when his value has moved, which is a daily event at most.
+                idempotency_key=f"raise:{lid}:{r.get('player_id')}:"
+                                f"{date.today().isoformat()}",
+                expires_at=utcnow() + timedelta(hours=6))
+        except ValueError as e:
+            continue_reason = f"no pude programarla: {e}"
+            got.setdefault("skipped", []).append({"nombre": r.get("nombre"),
+                                                  "why": continue_reason})
+            continue
+        queued.append(r)
+    return {**got, "raises": queued, "rival_reach": reach,
+            "cost_ratio": _clause_cost_ratio()}
 
 
 def _plan_shield(ctx, lid, report):
@@ -1052,6 +1196,10 @@ def run_review(ctx, force=False):
                    if _afford("clauses", 6) else {"queued": []})
         shield = (_plan_shield(ctx, lid, report)
                   if _afford("shield", 5) else {"queued": None})
+        # Defence goes after the buying phases on purpose: a squad you cannot
+        # improve is not worth defending, and the raises spend from what is left.
+        defense = (_plan_clause_defense(ctx, lid, team, report)
+                   if _afford("clause_defense", 5) else {"raises": []})
         matchday = (_plan_matchday_lineups(ctx, client, lid, tid)
                     if _afford("matchday", 5) else {"queued": []})
         # Cheapest and least urgent, so it goes last: the scrapes it reads are
@@ -1065,7 +1213,8 @@ def run_review(ctx, force=False):
         store.put_doc("last_report",
                       _summarize(report, lineup_res, bids_res, listings,
                                  clauses, shield, sources, gaps_res, skipped,
-                                 think_seconds=think_seconds, catchup=catchup))
+                                 think_seconds=think_seconds, catchup=catchup,
+                                 defense=defense))
         events.emit("review", f"Revisión: caja {report['money']:,} €",
                     detail={"flips": len(report.get("flips") or []),
                             "tasks": len(report.get("tasks") or []),
@@ -1128,7 +1277,7 @@ def _note_market_read(report):
 
 def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
                shield=None, sources=None, gaps_res=None, skipped_phases=None,
-               think_seconds=None, catchup=None):
+               think_seconds=None, catchup=None, defense=None):
     """What the dashboard reads. Deliberately small: a full review payload is
     hundreds of KB of squad data and there is no reason to store it every hour."""
     lu = report.get("lineup") or {}
@@ -1158,6 +1307,8 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "listings": listings or {},
         "clauses": clauses or {},
         "shield": shield or {},
+        # Who a rival could take off us right now, and what we did about it.
+        "defense": defense or {},
         "sources": sources or {},
         "skipped_phases": skipped_phases or [],
         # Next to the list of what was dropped, the two numbers that say why and
