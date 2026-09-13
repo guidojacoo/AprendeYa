@@ -42,6 +42,15 @@ DEFAULT_POLL = 3             # how often, in seconds, to poll in the final minut
 # account, so it can be low — this margin is the price of being wrong.
 RIVAL_CASH_MARGIN = 0.10
 
+# How far above the planned cap a bid may still climb when the player's LIVE
+# value has risen past it between the plan and the close. LaLiga re-values
+# players during the day, and the cap was sized off the value we read an hour
+# ago: without this, a 2% drift turns a planned signing into a refused bid. It
+# is bounded because the cap is also an affordability statement — a player who
+# has run 10% away from us is a player we plan for again tomorrow, not one we
+# chase with money earmarked for somebody else.
+VALUE_DRIFT = 0.10
+
 
 def cap_against_rivals(computed_cap, value, richest_rival_cash):
     """Lower a bid cap to what the competition could actually counter.
@@ -51,28 +60,49 @@ def cap_against_rivals(computed_cap, value, richest_rival_cash):
     only ever comes DOWN — and never below what the listing itself requires, or
     LaLiga rejects the bid outright ("not a valid money quantity").
 
+    `value` MUST be the price the listing actually requires, not a scraped
+    estimate of what the player is worth. Passing the low one is how a cap ends
+    up under the asking price: the rival ceiling wins the `min`, the floor is
+    too low to pull it back, and the bid is sent to be refused with 030.01.01.
+
     An unknown or zero reach means we know nothing about the field, and the
-    computed cap stands: guessing low there loses players for no reason.
+    computed cap stands: guessing low there loses players for no reason. An
+    unknown VALUE means the same thing about the floor — with no idea what the
+    listing requires, there is nothing to stop the rival ceiling cutting the cap
+    below it, so the cap stands there too. Capping a bid against a guess is how
+    a signing turns into `"8754920" is not a valid money quantity for this
+    player`, and a player we had the money for is lost to a cheaper number.
     """
     if not richest_rival_cash or richest_rival_cash <= 0:
         return computed_cap
-    floor = (value or 0) + UNCONTESTED_CUSHION
+    if not value:
+        return computed_cap
+    floor = value + UNCONTESTED_CUSHION
     ceiling = round(richest_rival_cash * (1 + RIVAL_CASH_MARGIN))
     return max(floor, min(computed_cap, ceiling))
 
 
 def decide(value, other_bids, seconds_left, max_bid, final=DEFAULT_FINAL):
-    """How much to bid NOW, or None to wait.
+    """How much to bid NOW, or None to wait — never an amount LaLiga refuses.
 
     - other_bids > 0  → competition: value + margin, capped at max_bid.
     - no competition and <= final s left → value + minimum cushion.
     - otherwise, wait.
+
+    The cap can only ever pull a bid down TO the player's value, never through
+    it. Below it there is no legal bid at all: LaLiga answers a bid under the
+    current value with 400 `"8754920" is not a valid money quantity for this
+    player` (030.01.01), the listing closes, and the player is gone. So a cap
+    under the value is not a cheaper bid, it is no bid — say so with None
+    instead of sending a request that cannot be accepted.
     """
+    if max_bid < value:
+        return None
     if other_bids > 0:
         competitive = value + max(UNCONTESTED_CUSHION, round(value * CONTESTED_MARGIN_PCT))
-        return min(max_bid, competitive)
+        return max(value, min(max_bid, competitive))
     if seconds_left <= final:
-        return min(max_bid, value + UNCONTESTED_CUSHION)
+        return max(value, min(max_bid, value + UNCONTESTED_CUSHION))
     return None
 
 
@@ -108,7 +138,7 @@ def _our_bid(row):
 
 def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
           poll=DEFAULT_POLL, dry_run=False, log=print, client=None,
-          budget_seconds=None, last_call_seconds=0):
+          budget_seconds=None, last_call_seconds=0, ceiling=None):
     """Watch a listing and bid at the optimal moment, within a time budget.
 
     Returns a dict whose "status" is one of:
@@ -117,6 +147,7 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
       gone      the listing is no longer in the market (closed or bought)
       closed    the close time passed without the conditions to bid
       unpriced  no usable value, so no bid could be sized
+      over_cap  the live value is above what we may pay — no legal bid exists
       waiting   still too early AND the budget ran out; call again later
     `budget_seconds=None` means "no budget": poll until the close (CLI behaviour).
 
@@ -126,6 +157,11 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
     price the final window would have produced. That costs the sniping edge
     (rivals see the bid count rise sooner) and it is not close: a bid placed
     forty seconds early beats a bid never placed. Two signings were lost to this.
+
+    `ceiling` is the hard limit the bid may climb to when the player's live value
+    has passed `max_bid` since the plan was made. It defaults to `max_bid` plus
+    `VALUE_DRIFT`. Past it there is no legal bid to place, and this returns
+    `over_cap` rather than sending one LaLiga will refuse.
     """
     fc = client or FantasyClient()
     started = time.monotonic()
@@ -174,9 +210,34 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
         if not value:  # no usable price -> can't size a bid (and would crash the f-string)
             log(f"[bid] {nombre}: no market value; can't price a bid.")
             return {"status": "unpriced", "market_id": market_id, "nombre": nombre}
+        # The live value is the legal minimum, and it moves. When it has moved
+        # past our cap, lift the cap to meet it — but only as far as the ceiling,
+        # and say plainly when the player has priced himself out. Both outcomes
+        # used to look the same from outside: a bid that never appeared.
+        cap = max_bid
+        if value > cap:
+            room = ceiling if ceiling is not None else round(max_bid * (1 + VALUE_DRIFT))
+            needed = value + UNCONTESTED_CUSHION
+            if needed <= room:
+                log(f"[bid] {nombre}: value rose to {value:,} (cap was "
+                    f"{max_bid:,}); lifting to {needed:,}.")
+                cap = needed
+            else:
+                log(f"[bid] {nombre}: value {value:,} is above the ceiling "
+                    f"{room:,}. No legal bid; standing down.")
+                events.emit("bid", f"Sin puja por {nombre}: vale {value:,} € y mi "
+                                   f"techo era {room:,} €",
+                            detail={"valor": value, "tope": max_bid,
+                                    "techo": room,
+                                    "why": "LaLiga rechaza cualquier puja por "
+                                           "debajo del valor actual"},
+                            status="skip")
+                return {"status": "over_cap", "market_id": market_id,
+                        "nombre": nombre, "value": value, "max_bid": max_bid,
+                        "ceiling": room}
         left = _seconds_left(close_iso)
         other_bids = el.get("numberOfBids", 0)
-        amount = decide(value, other_bids, left, max_bid, final)
+        amount = decide(value, other_bids, left, cap, final)
         if amount is not None:
             if dry_run:
                 log(f"[bid] {nombre}: WOULD BID {amount:,} "
@@ -205,7 +266,7 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
             if left <= last_call_seconds:
                 # No later call arrives before the close, so the watch cannot be
                 # handed back. Bid at the price the final window would have set.
-                amount = decide(value, other_bids, 0, max_bid, final)
+                amount = decide(value, other_bids, 0, cap, final)
                 if amount is None:
                     return {"status": "closed", "market_id": market_id,
                             "nombre": nombre}

@@ -204,11 +204,18 @@ class CapAgainstRivals(StorageTestCase):
                 bidding.cap_against_rivals(20_000_000, 10_000_000, reach),
                 20_000_000, f"reach={reach}")
 
-    def test_a_valueless_listing_falls_back_to_the_rival_ceiling(self):
-        """With no value to price a floor against, the field is all we know."""
-        self.assertEqual(bidding.cap_against_rivals(5_000_000, None, 1_000),
-                         1_100)
+    def test_a_valueless_listing_keeps_its_cap(self):
+        """These two used to expect the opposite, and that cost a signing.
 
-    def test_the_floor_wins_when_the_field_is_poorer_than_the_cushion(self):
+        With no value there is no floor, so the rival ceiling had nothing to
+        stop it: a five-million listing was capped at 1,100 € and LaLiga
+        refused the bid outright. The cap came from the listing's own price;
+        an unknown value is a reason to leave it alone, not to cut it to a
+        number no listing would accept.
+        """
+        self.assertEqual(bidding.cap_against_rivals(5_000_000, None, 1_000),
+                         5_000_000)
+
+    def test_a_poor_field_cannot_cut_a_cap_it_cannot_price(self):
         self.assertEqual(bidding.cap_against_rivals(5_000_000, None, 5),
-                         bidding.UNCONTESTED_CUSHION)
+                         5_000_000)

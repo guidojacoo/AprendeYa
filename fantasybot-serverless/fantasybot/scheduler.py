@@ -78,11 +78,16 @@ def bid_key(league_id, market_id, close_at):
 
 
 def schedule_bid(league_id, market_id, max_bid, close_at, nombre=None,
-                 lead_seconds=None):
+                 lead_seconds=None, ceiling=None):
     """Queue a last-minute bid. Returns the stored row.
 
     `execute_at` is placed a lead time BEFORE the close, not at it: the tick that
     picks the action up needs room to read the market, size the bid and send it.
+
+    `ceiling` is how high the bid may go if the player's live value has climbed
+    past `max_bid` by the time it fires. Stored with the action because the value
+    moves between the plan and the close, and a bid under the live value is not a
+    cheap bid — LaLiga refuses it and the listing closes without us.
     """
     lead = config.BID_LEAD_SECONDS if lead_seconds is None else lead_seconds
     close_dt = parse_iso(close_at)
@@ -92,7 +97,8 @@ def schedule_bid(league_id, market_id, max_bid, close_at, nombre=None,
     return get_storage().schedule_action(
         BID,
         {"league_id": str(league_id), "market_id": str(market_id),
-         "max_bid": int(max_bid), "nombre": nombre, "close_at": to_iso(close_dt)},
+         "max_bid": int(max_bid), "nombre": nombre, "close_at": to_iso(close_dt),
+         "ceiling": int(ceiling) if ceiling else None},
         execute_at=execute_at,
         idempotency_key=bid_key(league_id, market_id, close_dt),
         # A bid is worthless once the listing is gone; don't let a backlogged

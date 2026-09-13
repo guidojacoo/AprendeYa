@@ -35,6 +35,13 @@ COOLDOWNS = {
     "token_expiring": 43200,    # twice a day as the 90 days run out
     "storage_down": 3600,
     "scraper_degraded": 21600,
+    # A hole in the squad is a standing condition, not an event: it is still
+    # there next review, and the review runs hourly. At the default cooldown
+    # that is "Falta un POR" on your phone every fifteen minutes until the
+    # market closes — the same message nine times, which is how a useful alert
+    # becomes one you swipe away without reading. Once a day per position says
+    # everything the ninth said.
+    "gap": 86400,
     "default": 900,
 }
 

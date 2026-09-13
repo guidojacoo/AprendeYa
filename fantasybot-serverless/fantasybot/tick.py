@@ -37,6 +37,11 @@ from .storage import (DONE, FAILED, RUNNING, get_storage, parse_iso, to_iso,
 
 REVIEW_LOCK = "review"
 
+# The phases that put money to work. Dropping any of these for time is not the
+# same as dropping `sources` — it is a review that did all the thinking and none
+# of the acting, so it earns itself a second attempt a couple of minutes later.
+_SPENDING_PHASES = ("gap_signings", "listings", "bids", "clauses")
+
 # Runtime knobs that live in the DB (settings table) and fall back to env config,
 # so cadence can be retuned from the dashboard without a redeploy.
 _SETTING_DEFAULTS = {
@@ -111,7 +116,8 @@ def _execute_bid(ctx, action):
     res = bidding.snipe(league_id, market_id, int(p.get("max_bid") or 0),
                         dry_run=dry, log=ctx.log,
                         client=ctx.get_client(), budget_seconds=budget,
-                        last_call_seconds=config.CLOCK_INTERVAL_SECONDS + 10)
+                        last_call_seconds=config.CLOCK_INTERVAL_SECONDS + 10,
+                        ceiling=p.get("ceiling"))
     if res.get("status") == "waiting":
         # Still early. Stay queued; the scheduler will wake us closer to the close.
         return {"retry": True, **res}
@@ -417,26 +423,36 @@ def _plan_bids(ctx, client, lid, team, report):
             skipped.append({"market_id": mid, "nombre": b.get("nombre"),
                             "reason": "el anuncio no trae hora de cierre"})
             continue
-        capped = bidding.cap_against_rivals(
-            b["amount"], (by_id.get(mid) or {}).get("valor_actual"), reach)
+        # The asking price is not negotiable. A system listing cannot be bought
+        # for less than it costs, so the rival cap has nothing to lower here —
+        # cutting the BID down to what a poor league could counter just sends a
+        # number LaLiga refuses. What the field does bound is how far ABOVE the
+        # price we chase: the value drifts during the day and auctions get
+        # contested, and outbidding money nobody has is money that does not buy
+        # the next player. So the price is the bid, and the field caps the roof.
+        price = int(num(b["amount"]))
+        ceiling = bidding.cap_against_rivals(
+            round(price * (1 + bidding.VALUE_DRIFT)), price, reach)
         try:
-            row = scheduler.schedule_bid(lid, mid, capped, close_at,
-                                         nombre=b.get("nombre"))
+            row = scheduler.schedule_bid(lid, mid, price, close_at,
+                                         nombre=b.get("nombre"),
+                                         ceiling=ceiling)
         except ValueError as e:
             skipped.append({"market_id": mid, "nombre": b.get("nombre"),
                             "reason": f"no pude programarla: {e}"})
             continue
         state.complete_by_key(f"sell:{(by_id.get(mid) or {}).get('player_id')}")
         why = explain.bid(by_id.get(mid) or {"nombre": b.get("nombre")},
-                          capped, reach if capped < b["amount"] else None)
+                          price, reach if ceiling < round(price * (1 + bidding.VALUE_DRIFT))
+                          else None)
         scheduled.append({"market_id": mid, "nombre": b.get("nombre"),
-                          "max_bid": capped, "computed_cap": b["amount"],
+                          "max_bid": price, "ceiling": ceiling,
+                          "computed_cap": b["amount"],
                           "rival_reach": reach, "close_at": to_iso(close_at),
                           "why": why, "status": row.get("status")})
         events.emit("bid-plan", f"Puja programada para el cierre: {b.get('nombre') or mid}",
                     detail={"why": why, "closes": to_iso(close_at),
-                            "capped_from": (f"{b['amount']:,}"
-                                            if capped < b["amount"] else None)},
+                            "precio": f"{price:,}", "techo": f"{ceiling:,}"},
                     status="plan")
     return {"mode": "snipe", "scheduled": scheduled, "skipped": skipped}
 
@@ -539,8 +555,13 @@ def _plan_gap_signings(ctx, lid, team, report):
                                 f"para el hueco en {pos}",
                     detail={"why": why, "closes": c.get("expires")},
                     status="plan")
+        # Say what the hole actually is. "Falta un POR" next to three keepers
+        # in the squad reads as a bot that cannot count; "1 de 2" reads as what
+        # it is — a starter with no cover. Same alert, and you can act on it.
+        have, want = counts.get(pos), MIN_SQUAD.get(pos)
+        short = f" ({have} de {want})" if have is not None and want else ""
         notify.send(f"gap:{pos}:{date.today().isoformat()}",
-                    f"Falta un {pos}: pujando por {c.get('nombre')} "
+                    f"Me falta {pos}{short}: pujando por {c.get('nombre')} "
                     f"hasta {cap:,} €", level="info")
     return {"mode": "on", "queued": queued, "skipped": skipped,
             "committed": committed}
@@ -670,6 +691,36 @@ def _schedule_warm(store):
             expires_at=at + timedelta(hours=2))
     except Exception:
         pass
+
+
+def _schedule_catchup(skipped, now):
+    """Re-run the review shortly when the clock cost it a phase that SPENDS.
+
+    A review that drops `gap_signings` and `bids` has done the whole expensive
+    part — reading the market, pricing every candidate, ranking the upgrades —
+    and then stopped one step before the only step that puts money to work. The
+    next one is an hour away, and in that hour the listings it was going to bid
+    on close. Forty-five million in the bank and zero bids scheduled is not a
+    cautious bot, it is a bot that ran out of seconds.
+
+    Two minutes later the scraped caches are still warm, so the re-run reaches
+    those phases with time to spare. Keyed by the hour, so a review that keeps
+    running long retries once and then waits for its next turn rather than
+    looping on itself.
+    """
+    spending = [n for n in skipped if n in _SPENDING_PHASES]
+    if not spending:
+        return None
+    try:
+        at = now + timedelta(seconds=120)
+        scheduler.schedule(
+            scheduler.REVIEW, {"reason": f"catch-up: {', '.join(spending)}"},
+            execute_at=at,
+            idempotency_key=f"review-catchup:{now.strftime('%Y%m%d%H')}",
+            expires_at=at + timedelta(minutes=20))
+        return {"at": to_iso(at), "phases": spending}
+    except Exception:                            # noqa: BLE001
+        return None
 
 
 def _check_sources(report):
@@ -998,6 +1049,7 @@ def run_review(ctx, force=False):
         # already warm from the review above.
         sources = _check_sources(report) if _afford("sources", 4) else {}
         _schedule_warm(store)
+        catchup = _schedule_catchup(skipped, now)
         reminders = _queue_reminders(report, dry_run=ctx.dry_run)
 
         store.put_doc("last_review_at", to_iso(now))
@@ -1012,7 +1064,9 @@ def run_review(ctx, force=False):
         if skipped:
             events.emit("note", f"Revisión acortada por tiempo: "
                                 f"{', '.join(skipped)}",
-                        detail={"elapsed": round(ctx.elapsed(), 1)},
+                        detail={"elapsed": round(ctx.elapsed(), 1),
+                                "reintento": (catchup or {}).get("at")
+                                or "no hace falta"},
                         status="plan")
         return {"status": "ok", "money": report.get("money"),
                 # Which phases the clock cost us, and how long the whole thing
