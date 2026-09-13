@@ -133,3 +133,94 @@ def best_plan(ranked, money, reserve=0, max_signings=3):
         picked.append({**row, "running_total": spent + price})
         spent += price
     return picked
+
+
+def loss_from_selling(team, player_team_id, prob_index=None,
+                      fixture_difficulty=None, base=None):
+    """Points per gameweek the XI loses if this player leaves.
+
+    Zero for most of a squad: a bench player who never makes the eleven costs
+    nothing to sell, however much he is worth. That is exactly the money a better
+    starter should be bought with.
+    """
+    if base is None:
+        base = squad_points(team, prob_index, fixture_difficulty)
+    without = [p for p in team.get("players") or []
+               if str(p.get("playerTeamId")) != str(player_team_id)]
+    trial = {**team, "players": without}
+    return round(base - squad_points(trial, prob_index, fixture_difficulty), 2)
+
+
+# How much of a player's reserve price we assume we would actually get. A
+# reserve is an ASK, and a transfer plan built on the ask is a plan that funds
+# itself with money nobody has offered. Selling to the system is the floor that
+# always exists, and it pays around the market value.
+SALE_HAIRCUT = 0.90
+
+
+def sellable(team, reserves=None, prob_index=None, fixture_difficulty=None):
+    """Every owned player, with what leaving would cost and what he would raise.
+
+    Sorted by the cheapest thing to give up first: no points lost, most money
+    raised. That is the order a transfer should eat through a squad in.
+    """
+    base = squad_points(team, prob_index, fixture_difficulty)
+    reserves = reserves or {}
+    out = []
+    for p in team.get("players") or []:
+        pm = p.get("playerMaster") or {}
+        pid = str(pm.get("id"))
+        ptid = p.get("playerTeamId") or pid
+        value = num(pm.get("marketValue"))
+        raise_ = int(num(reserves.get(pid)) or value * SALE_HAIRCUT)
+        out.append({
+            "player_id": pid, "player_team_id": ptid,
+            "nombre": pm.get("nickname") or pm.get("name"),
+            "pos": position_of(pm, "?"),
+            "value": int(value), "raises": raise_,
+            "loss": loss_from_selling(team, ptid, prob_index,
+                                      fixture_difficulty, base=base),
+        })
+    out.sort(key=lambda r: (r["loss"], -r["raises"]))
+    return out
+
+
+def transfers(ranked, team, money=0, reserves=None, prob_index=None,
+              fixture_difficulty=None, reserve_cash=0, limit=5):
+    """Signings the cash cannot reach, paired with the player who funds them.
+
+    The bot could only ever buy what its balance covered, so a squad holding a
+    nine-million bench player who scores nothing was locked out of every real
+    starter on the market. Selling him IS the transfer; treating the two halves
+    as separate decisions is what kept them from ever happening.
+
+    Net points, never gross: a sale that costs more than the signing adds is not
+    a transfer, it is a downgrade with extra steps.
+    """
+    spare = max(0, int(num(money)) - int(num(reserve_cash)))
+    give_up = sellable(team, reserves, prob_index, fixture_difficulty)
+    owned_ids = {r["player_id"] for r in give_up}
+    out = []
+    for buy in ranked:
+        if buy.get("gain", 0) < MIN_GAIN:
+            continue
+        price = int(num(buy.get("buy_price")))
+        if price <= spare:
+            continue          # affordable already; not a transfer
+        for sell in give_up:
+            if sell["player_id"] in owned_ids and sell["raises"] + spare < price:
+                continue      # still does not cover it
+            net = round(buy["gain"] - sell["loss"], 2)
+            if net < MIN_GAIN:
+                continue      # the sale costs more than the signing adds
+            out.append({
+                "buy": buy.get("nombre"), "market_id": buy.get("market_id"),
+                "price": price, "gain": buy.get("gain"),
+                "sell": sell["nombre"], "player_team_id": sell["player_team_id"],
+                "raises": sell["raises"], "loss": sell["loss"],
+                "net_gain": net,
+                "left_over": sell["raises"] + spare - price,
+            })
+            break             # the cheapest sale that covers it, and no more
+    out.sort(key=lambda r: -r["net_gain"])
+    return out[:limit] if limit else out

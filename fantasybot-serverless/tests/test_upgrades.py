@@ -118,3 +118,64 @@ class SpendingTheBudget(unittest.TestCase):
         rows = [{"nombre": "a", "buy_price": 1_000_000, "gain": 0.05,
                  "gain_per_million": 0.05, "affordable": True}]
         self.assertEqual(upgrades.best_plan(rows, 10_000_000), [])
+
+
+class SellingToFundASigning(unittest.TestCase):
+    """The bot could only buy what its balance covered, so a squad holding a
+    nine-million bench player who scores nothing was locked out of every real
+    starter on the market. Selling him IS the transfer."""
+
+    def _team(self):
+        team = squad(avg=3)
+        # A dear passenger: expensive, and he never makes the XI because the
+        # squad already fields four better strikers.
+        team["players"].append({
+            "playerTeamId": "pt-dead",
+            "playerMaster": card("dead", 4, 9_000_000, 0)})
+        team["teamMoney"] = "1000000"
+        return team
+
+    def test_a_bench_player_costs_nothing_to_lose(self):
+        rows = upgrades.sellable(self._team(), prob_index={})
+        dead = next(r for r in rows if r["nombre"] == "dead")
+        self.assertEqual(dead["loss"], 0.0)
+        self.assertEqual(rows[0]["loss"], 0.0, "cheapest to give up comes first")
+
+    def test_a_starter_costs_real_points_to_lose(self):
+        rows = upgrades.sellable(squad(avg=5), prob_index={})
+        self.assertTrue(any(r["loss"] > 0 for r in rows))
+
+    def test_the_sale_unlocks_a_signing_the_cash_could_not_reach(self):
+        team = self._team()
+        cards = {"star": card("star", 4, 9_000_000, 9)}
+        ranked = upgrades.rank([op("star", 9_000_000)], team, cards,
+                               money=1_000_000, prob_index={})
+        got = upgrades.transfers(ranked, team, money=1_000_000, prob_index={})
+        self.assertEqual(len(got), 1)
+        self.assertEqual((got[0]["buy"], got[0]["sell"]), ("star", "dead"))
+        self.assertGreater(got[0]["net_gain"], 1.0)
+
+    def test_a_sale_that_costs_more_than_the_signing_adds_is_refused(self):
+        """Not a transfer — a downgrade with extra steps."""
+        team = squad(avg=9)
+        team["teamMoney"] = "0"
+        ranked = [{"nombre": "meh", "market_id": "m", "buy_price": 5_000_000,
+                   "gain": 0.3}]
+        self.assertEqual(
+            upgrades.transfers(ranked, team, money=0, prob_index={}), [])
+
+    def test_something_already_affordable_is_not_a_transfer(self):
+        team = self._team()
+        team["teamMoney"] = "50000000"
+        cards = {"star": card("star", 4, 9_000_000, 9)}
+        ranked = upgrades.rank([op("star", 9_000_000)], team, cards,
+                               money=50_000_000, prob_index={})
+        self.assertEqual(
+            upgrades.transfers(ranked, team, money=50_000_000, prob_index={}), [])
+
+    def test_the_ask_is_discounted_to_what_would_actually_be_paid(self):
+        """A reserve is an ASK. A plan funded by the ask funds itself with money
+        nobody has offered."""
+        rows = upgrades.sellable(self._team(), prob_index={})
+        dead = next(r for r in rows if r["nombre"] == "dead")
+        self.assertLess(dead["raises"], dead["value"])

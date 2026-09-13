@@ -216,6 +216,10 @@
     <!-- MERCADO -->
     <div data-panel="mercado" class="hide">
       <section><h2>Por qué hace lo que hace</h2><div id="why"></div></section>
+      <section><h2>Qué subiría más el once</h2>
+        <div class="note">Puntos que gana mi alineación por jornada, y lo que cuesta cada uno.</div>
+        <div id="upgrades"></div></section>
+      <section><h2>Ventas que financian un fichaje</h2><div id="transfers"></div></section>
       <section><h2>Todo el mercado, puntuado</h2>
         <div class="note">Tocá un jugador para ver el razonamiento.</div>
         <div class="scroll" id="market"></div></section>
@@ -468,6 +472,26 @@ function render(d){
       +'<small>Pasa cuando la revisión se acerca al límite de 60s de Vercel. '
       +'Se retoma en la siguiente.</small></div></div>')
     :'<div class="empty">La última revisión hizo todo lo que tenía que hacer.</div>';
+
+  /* ---- qué subiría más el once ---- */
+  const ups=(rep.upgrades||[]).filter(u=>u.gain>0);
+  list($('upgrades'),ups,u=>
+    '<div class="row"><span class="tag '+(u.affordable?'ok':'warn')+'">'
+    +esc('+'+Number(u.gain).toFixed(2))+'</span>'
+    +'<div class="m"><b>'+esc(u.nombre)+'</b> '+esc(u.pos||'')
+    +'<small>'+esc(u.gain_per_million)+' pts por millón'
+    +(u.affordable?'':' · no alcanza la caja')+'</small></div>'
+    +'<div class="right">'+esc(short(u.buy_price))+'</div></div>',
+    'Ningún fichaje del mercado mejoraría el once ahora mismo.');
+
+  /* ---- ventas que financian un fichaje ---- */
+  list($('transfers'),rep.transfers,t=>
+    '<div class="row"><span class="tag idle">'+esc('+'+Number(t.net_gain).toFixed(2))+'</span>'
+    +'<div class="m"><b>'+esc(t.buy)+'</b> por '+esc(short(t.price))
+    +'<small>Vendiendo a '+esc(t.sell)+' ('+esc(short(t.raises))+', '
+    +(t.loss?'cuesta '+Number(t.loss).toFixed(2)+' pts':'no juega, no cuesta puntos')
+    +') · quedan '+esc(short(t.left_over))+'</small></div></div>',
+    'Ninguna venta desbloquea un fichaje que valga la pena.');
 
   /* ---- el mercado entero, puntuado ---- */
   const mk=rep.market||[];

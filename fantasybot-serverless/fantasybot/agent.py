@@ -446,6 +446,13 @@ def review(client, days_to_matchday=None):
         "flips": flips,
         "market": market,
         "upgrades": upgrade_list,
+        # Signings the balance alone cannot reach, each paired with the player
+        # who would fund it. Without this the bot is capped at whatever cash
+        # happens to be lying around, while a bench player worth nine million
+        # and scoring nothing sits there paying for nobody.
+        "transfers": upgrades.transfers(
+            upgrade_list, team, money=team["teamMoney"],
+            prob_index=prob_index, fixture_difficulty=fixture_difficulty),
         "gaps": gaps,
         # What it actually counted, next to what it concluded. "No tengo ningún
         # POR" while three sit in the squad is a claim with no evidence beside
