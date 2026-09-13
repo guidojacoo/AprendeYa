@@ -316,6 +316,10 @@ def _execute_raise_clause(ctx, action):
     client = ctx.get_client()
     lid, tid = league_ids(client)
     pid = p.get("player_id")
+    # The ROSTER SLOT, not the footballer. Like sell_player and shield_player,
+    # this endpoint acts on a slot in our squad: given the playerMaster id it
+    # answers 404, which is exactly what it did the first time it ran live.
+    ptid = p.get("player_team_id") or pid
     target = int(num(p.get("target")))
 
     # Re-read before spending: the clause rises on its own with the player's
@@ -342,7 +346,7 @@ def _execute_raise_clause(ctx, action):
         return {"status": "too_expensive", "nombre": p.get("nombre"),
                 "cost": cost, "money": before_money}
 
-    resp = client.increase_buyout_clause(lid, pid, target)
+    resp = client.increase_buyout_clause(lid, ptid, target)
 
     # What it actually cost. Read from the account, not from the response.
     after = client.team(lid, tid)

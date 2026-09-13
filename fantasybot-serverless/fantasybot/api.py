@@ -14,7 +14,25 @@ from . import auth, config
 
 
 class FantasyError(Exception):
-    pass
+    """A call LaLiga refused. `status` is the HTTP code when there was one.
+
+    Carried so the scheduler can tell a transient failure from a permanent one:
+    a 503 is worth retrying and a 404 is the same answer three times in six
+    seconds, which is noise in the event log and a notification for nothing.
+    """
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def permanent(self):
+        """A client error we will get again: wrong path, wrong id, not allowed.
+
+        429 and 408 are excluded — those ARE worth waiting out.
+        """
+        return bool(self.status and 400 <= self.status < 500
+                    and self.status not in (408, 429))
 
 
 class FantasyClient:
@@ -65,7 +83,8 @@ class FantasyClient:
                 self.refresh()
                 return self._do(method, path, body, retry_on_401=False)
             detail = e.read().decode("utf-8", "replace")[:400]
-            raise FantasyError(f"{method} {path} -> {e.code}: {detail}") from None
+            raise FantasyError(f"{method} {path} -> {e.code}: {detail}",
+                               status=e.code) from None
 
     def get(self, path):
         return self._request("GET", path)
@@ -237,10 +256,17 @@ class FantasyClient:
             f"/league/{league_id}/buyout/{player_id}/pay?x-lang=es"),
             {"buyoutClauseToPay": amount})
 
-    def increase_buyout_clause(self, league_id, player_id, amount):
-        """Raises the clause of one of your players to protect them."""
+    def increase_buyout_clause(self, league_id, player_team_id, amount):
+        """Raises the clause of one of your players to protect them.
+
+        Keyed on the playerTeamId (your roster-slot id), NOT the playerMaster id
+        — the same rule `sell_player` and `shield_player` follow, and for the
+        same reason: these act on a slot in YOUR squad, not on a footballer in
+        the abstract. Sent with the playerMaster id it answers 404 Not Found,
+        which is what it did on the first live attempt.
+        """
         return self.post(self._cmp(
-            f"/league/{league_id}/buyout/{player_id}/increase?x-lang=es"),
+            f"/league/{league_id}/buyout/{player_team_id}/increase?x-lang=es"),
             {"buyoutClause": amount})
 
     # --- shield (blindaje): protect a player from a rival's buyout clause ---

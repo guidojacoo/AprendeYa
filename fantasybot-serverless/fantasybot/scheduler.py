@@ -188,14 +188,21 @@ def _run_one(store, action, ctx, now, log):
         # Retrying is only safe because every executor re-checks the world before
         # it acts (see guard 3 above). Past a few tries we stop and leave it FAILED
         # rather than hammering an endpoint that is clearly refusing us.
-        status = PENDING if failures < ctx.max_attempts else FAILED
+        #
+        # And some refusals are already final. A 404 is the same answer three
+        # times in six seconds: three identical error events, three notifications
+        # and no new information. Only a failure that could plausibly go away on
+        # its own earns another try.
+        permanent = bool(getattr(e, "permanent", False))
+        status = FAILED if (permanent or failures >= ctx.max_attempts) else PENDING
         store.finish_action(action, status, error=f"{type(e).__name__}: {e}",
                             result={"failures": failures})
         events.emit("error", f"Falló la acción {atype}: {e}", status="error",
                     detail={"key": key, "intento": failures})
-        log(f"[tick] {atype} {key} FAILED (attempt {failures}): {e}")
+        log(f"[tick] {atype} {key} FAILED (attempt {failures}"
+            f"{', permanent' if permanent else ''}): {e}")
         return {"key": key, "type": atype, "status": status, "error": str(e),
-                "failures": failures}
+                "failures": failures, "permanent": permanent}
 
     # "retry" lets an executor say "nothing happened yet, ask me again" — the
     # sniper uses it when its budget ran out before the close.

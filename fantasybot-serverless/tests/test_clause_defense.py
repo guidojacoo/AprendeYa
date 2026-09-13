@@ -7,6 +7,7 @@ did, which meant it was playing a strictly harder game than everyone else.
 """
 
 from fantasybot import config
+from fantasybot.storage import utcnow
 from fantasybot.strategy import clausedefense as cd
 from tests.support import StorageTestCase
 
@@ -122,3 +123,94 @@ class TheDefenceIsOnByDefault(StorageTestCase):
 
     def test_one_player_can_never_take_the_whole_bank(self):
         self.assertTrue(0 < config.MAX_CLAUSE_SHARE < 1)
+
+
+class TheEndpointActsOnARosterSlot(StorageTestCase):
+    """LaLiga keys every write about OUR OWN player on the playerTeamId, not on
+    the playerMaster id: sell_player does, shield_player does, and this one does
+    too. Given the footballer's id it answers 404 Not Found, which is what it
+    did the first time it ran live."""
+
+    def test_the_raise_is_sent_with_the_player_team_id(self):
+        from fantasybot import config, scheduler, tick
+        from fantasybot.scheduler import TickContext
+
+        sent = []
+
+        class _C:
+            def default_ids(self):
+                return "L1", "T1"
+
+            def team(self, lid, tid):
+                return {"teamMoney": 50_000_000, "players": [
+                    {"playerTeamId": "pt-99", "buyoutClause": 9_000_000,
+                     "playerMaster": {"id": "2533", "nickname": "Uno",
+                                      "marketValue": 8_000_000}}]}
+
+            def increase_buyout_clause(self, lid, pid, amount):
+                sent.append(pid)
+                return {"ok": True}
+
+        flags = (config.AUTO_RAISE_CLAUSE, config.AUTO_EXECUTE)
+        config.AUTO_RAISE_CLAUSE = config.AUTO_EXECUTE = True
+        self.addCleanup(lambda: setattr(config, "AUTO_RAISE_CLAUSE", flags[0]))
+        self.addCleanup(lambda: setattr(config, "AUTO_EXECUTE", flags[1]))
+
+        ctx = TickContext(budget_seconds=20, log=lambda m: None)
+        ctx.get_client = lambda: _C()
+        tick._execute_raise_clause(ctx, {"payload": {
+            "league_id": "L1", "player_id": "2533", "player_team_id": "pt-99",
+            "nombre": "Uno", "target": 13_500_000, "clause": 9_000_000}})
+        self.assertEqual(sent, ["pt-99"],
+                         "sent with the footballer's id it answers 404")
+
+
+class APermanentRefusalIsNotRetried(StorageTestCase):
+    """A 404 is the same answer three times in six seconds: three identical
+    error events, three notifications, no new information."""
+
+    def test_a_404_fails_the_action_immediately(self):
+        from fantasybot import scheduler
+        from fantasybot.api import FantasyError
+        from fantasybot.scheduler import TickContext
+        from fantasybot.storage import FAILED, get_storage
+
+        @scheduler.executor("refused")
+        def _refused(ctx, action):
+            raise FantasyError("POST /increase -> 404: Not Found", status=404)
+
+        scheduler.schedule("refused", {}, execute_at=utcnow(),
+                           idempotency_key="refused:1")
+        ctx = TickContext(budget_seconds=20, log=lambda m: None)
+        store = get_storage()
+        res = [scheduler._run_one(store, a, ctx, utcnow(), lambda m: None)
+               for a in store.due_actions()][0]
+        self.assertEqual(res["status"], FAILED)
+        self.assertTrue(res["permanent"])
+        self.assertEqual(res["failures"], 1)
+
+    def test_a_503_still_gets_another_try(self):
+        from fantasybot import scheduler
+        from fantasybot.api import FantasyError
+        from fantasybot.scheduler import TickContext
+        from fantasybot.storage import PENDING, get_storage
+
+        @scheduler.executor("flaky")
+        def _flaky(ctx, action):
+            raise FantasyError("GET /market -> 503: upstream", status=503)
+
+        scheduler.schedule("flaky", {}, execute_at=utcnow(),
+                           idempotency_key="flaky:1")
+        ctx = TickContext(budget_seconds=20, log=lambda m: None)
+        store = get_storage()
+        res = [scheduler._run_one(store, a, ctx, utcnow(), lambda m: None)
+               for a in store.due_actions()][0]
+        self.assertEqual(res["status"], PENDING)
+        self.assertFalse(res["permanent"])
+
+    def test_rate_limiting_is_worth_waiting_out(self):
+        from fantasybot.api import FantasyError
+        self.assertFalse(FantasyError("slow down", status=429).permanent)
+        self.assertFalse(FantasyError("timeout", status=408).permanent)
+        self.assertTrue(FantasyError("nope", status=400).permanent)
+        self.assertFalse(FantasyError("no status at all").permanent)
