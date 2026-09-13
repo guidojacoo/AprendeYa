@@ -23,6 +23,7 @@ from .strategy import upgrades
 from .strategy import shield as shield_mod
 from .sources.lineups import probable_lineups
 from .sources.market_trends import trends_index
+from .sources import form
 from .sources import matchday
 from .sources import value_history
 
@@ -289,6 +290,19 @@ def review(client, days_to_matchday=None):
     team = client.team(lid, tid)
     market = client.market(lid)
     prob_index = probable_lineups()
+    # The last few gameweeks, from LaLiga's own stats. Two signals the bot could
+    # not see: whether a player is in form right now rather than on the season
+    # average, and whether he is actually being PICKED — which the scraped
+    # probability cannot tell us about a man his manager has quietly dropped,
+    # and which keeps standing when that scrape breaks. Never fatal: a failure
+    # here leaves every estimate exactly where it was before.
+    form_index = {}
+    try:
+        week_now = (client.current_week() or {}).get("weekNumber")
+        if week_now:
+            form_index = form.history(client, week_now)
+    except Exception:                            # noqa: BLE001
+        form_index = {}
 
     # date of the next matchday (for urgency and final lineup)
     kickoff = matchday.next_kickoff()
@@ -321,7 +335,8 @@ def review(client, days_to_matchday=None):
         # against the bottom club.
         fixture_difficulty = captain_fixture_difficulty(client)
         best = lineup_opt.optimize(team, prob_index, premium=premium,
-                                   fixture_difficulty=fixture_difficulty)
+                                   fixture_difficulty=fixture_difficulty,
+                                   form_index=form_index)
         best_ids = lineup_opt.payload_ids(best)
         lineup_changed = best_ids != _current_xi_ids(client, tid)
         lineup_section = {"formation": best["formation"], "changed": lineup_changed,
@@ -346,7 +361,8 @@ def review(client, days_to_matchday=None):
     upgrade_list = upgrades.rank(
         ops, team, upgrades.players_by_id(market),
         money=team["teamMoney"], prob_index=prob_index,
-        fixture_difficulty=fixture_difficulty, limit=20)
+        fixture_difficulty=fixture_difficulty, limit=20,
+        form_index=form_index)
     market = scoring.rank(ops, prob_index=prob_index, money=team["teamMoney"],
                           limit=40,
                           # Judged against the man he would actually push out of
@@ -452,7 +468,8 @@ def review(client, days_to_matchday=None):
         # and scoring nothing sits there paying for nobody.
         "transfers": upgrades.transfers(
             upgrade_list, team, money=team["teamMoney"],
-            prob_index=prob_index, fixture_difficulty=fixture_difficulty),
+            prob_index=prob_index, fixture_difficulty=fixture_difficulty,
+            form_index=form_index),
         "gaps": gaps,
         # The ones that stop an XI being fielded at all, as opposed to the ones
         # that merely leave you without a substitute. Only these justify buying
@@ -473,8 +490,12 @@ def review(client, days_to_matchday=None):
         "points_at_risk": {r["player_team_id"]: r["loss"]
                            for r in upgrades.sellable(
                                team, prob_index=prob_index,
-                               fixture_difficulty=fixture_difficulty)},
+                               fixture_difficulty=fixture_difficulty,
+                               form_index=form_index)},
         "clause_targets": targets,
+        # Whether the per-gameweek stats are actually parsing. A source that
+        # returns {} looks exactly like a quiet week, forever.
+        "form": form.describe(form_index),
         "rivals": rivals_list,
         "reminders": reminders,
         "tasks": state.pending_tasks(),

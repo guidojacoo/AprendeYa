@@ -890,12 +890,19 @@ def _check_sources(report):
         return {"ok": False, "error": str(e)}
     # LaLiga has 20 clubs and ~500 players; a working scrape returns hundreds.
     ok = trends >= 100 and lineups >= 100
+    # The per-gameweek stats come from LaLiga, not from a scrape, which is
+    # exactly why they are worth reporting next to it: when the scrape is the
+    # half that broke, this is the half still telling us who is playing.
+    form_stat = report.get("form") or {}
     if not ok:
+        cover = ("Los datos oficiales por jornada siguen bien, así que aún sé "
+                 "quién está jugando." if form_stat.get("ok") else
+                 "Los datos oficiales por jornada tampoco están llegando.")
         notify.send("scraper_degraded",
                     f"Fuentes externas degradadas: {trends} tendencias, "
-                    f"{lineups} alineaciones probables. El bot sigue, pero con "
-                    f"menos información.", level="warn")
-    return {"ok": ok, "trends": trends, "lineups": lineups}
+                    f"{lineups} alineaciones probables. {cover}", level="warn")
+    return {"ok": ok, "trends": trends, "lineups": lineups,
+            "form": form_stat}
 
 
 def _kickoffs(client):

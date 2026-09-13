@@ -53,7 +53,8 @@ _EMPTY_KEEPER = {"playerTeamId": "sim:no-keeper",
                                   "lastSeasonPoints": 0}}
 
 
-def squad_points(team, prob_index=None, fixture_difficulty=None):
+def squad_points(team, prob_index=None, fixture_difficulty=None,
+                 form_index=None):
     """Expected points of the best XI this squad can field.
 
     A squad with no goalkeeper does NOT score zero: the ten outfielders still
@@ -66,13 +67,15 @@ def squad_points(team, prob_index=None, fixture_difficulty=None):
     """
     try:
         best = lineup_opt.optimize(team, prob_index,
-                                   fixture_difficulty=fixture_difficulty)
+                                   fixture_difficulty=fixture_difficulty,
+                                   form_index=form_index)
     except ValueError:
         try:
             best = lineup_opt.optimize(
                 {**team, "players": list(team.get("players") or [])
                  + [_EMPTY_KEEPER]},
-                prob_index, fixture_difficulty=fixture_difficulty)
+                prob_index, fixture_difficulty=fixture_difficulty,
+                form_index=form_index)
         except ValueError:
             return 0.0      # not even ten outfielders: nothing to field
     return float(best.get("total") or 0.0)
@@ -87,7 +90,8 @@ def _as_squad_member(pm):
     return {"playerTeamId": f"sim:{pm.get('id')}", "playerMaster": pm}
 
 
-def _without_best_in_line(team, pos, prob_index=None, fixture_difficulty=None):
+def _without_best_in_line(team, pos, prob_index=None, fixture_difficulty=None,
+                          form_index=None):
     """The squad minus its strongest player in one position.
 
     Not a hypothetical: it is the ordinary state of a squad about one week in
@@ -103,6 +107,7 @@ def _without_best_in_line(team, pos, prob_index=None, fixture_difficulty=None):
 
 
 def gain_from(team, pm, prob_index=None, fixture_difficulty=None, base=None,
+              form_index=None,
               with_insurance=True):
     """Points per gameweek the XI gains by owning this player.
 
@@ -113,19 +118,21 @@ def gain_from(team, pm, prob_index=None, fixture_difficulty=None, base=None,
     between fielding ten men and eleven on the week it happens.
     """
     if base is None:
-        base = squad_points(team, prob_index, fixture_difficulty)
+        base = squad_points(team, prob_index, fixture_difficulty, form_index)
     trial = {**team, "players": list(team.get("players") or [])
              + [_as_squad_member(pm)]}
-    now = squad_points(trial, prob_index, fixture_difficulty) - base
+    now = squad_points(trial, prob_index, fixture_difficulty, form_index) - base
     if not with_insurance:
         return round(now, 2)
 
     pos = position_of(pm)
-    thin = _without_best_in_line(team, pos, prob_index, fixture_difficulty)
-    thin_base = squad_points(thin, prob_index, fixture_difficulty)
+    thin = _without_best_in_line(team, pos, prob_index, fixture_difficulty,
+                                 form_index)
+    thin_base = squad_points(thin, prob_index, fixture_difficulty, form_index)
     thin_with = squad_points(
         {**thin, "players": list(thin.get("players") or [])
-         + [_as_squad_member(pm)]}, prob_index, fixture_difficulty)
+         + [_as_squad_member(pm)]}, prob_index, fixture_difficulty,
+        form_index)
     cover = max(0.0, (thin_with - thin_base) - max(0.0, now))
     return round(now + UNAVAILABILITY * cover, 2)
 
@@ -146,7 +153,7 @@ def players_by_id(market):
 
 
 def rank(ops, team, cards=None, money=None, prob_index=None,
-         fixture_difficulty=None, limit=None):
+         fixture_difficulty=None, limit=None, form_index=None):
     """Every candidate, ranked by the points he adds to the XI per euro.
 
     `ops` are market rows already evaluated by strategy.flip — they carry the
@@ -157,7 +164,7 @@ def rank(ops, team, cards=None, money=None, prob_index=None,
     adds one and a half for twice the price, and the budget is finite. Absolute
     gain breaks ties, because a squad has only so many slots.
     """
-    base = squad_points(team, prob_index, fixture_difficulty)
+    base = squad_points(team, prob_index, fixture_difficulty, form_index)
     owned = {str((p.get("playerMaster") or {}).get("id"))
              for p in team.get("players") or []}
     cards = cards or {}
@@ -170,7 +177,8 @@ def rank(ops, team, cards=None, money=None, prob_index=None,
         price = int(num(op.get("buy_price")))
         if price <= 0:
             continue
-        gain = gain_from(team, pm, prob_index, fixture_difficulty, base=base)
+        gain = gain_from(team, pm, prob_index, fixture_difficulty, base=base,
+                         form_index=form_index)
         out.append({
             **op,
             "gain": gain,
@@ -209,7 +217,7 @@ def best_plan(ranked, money, reserve=0, max_signings=3):
 
 
 def loss_from_selling(team, player_team_id, prob_index=None,
-                      fixture_difficulty=None, base=None):
+                      fixture_difficulty=None, base=None, form_index=None):
     """Points per gameweek the XI loses if this player leaves.
 
     Zero for most of a squad: a bench player who never makes the eleven costs
@@ -217,11 +225,11 @@ def loss_from_selling(team, player_team_id, prob_index=None,
     starter should be bought with.
     """
     if base is None:
-        base = squad_points(team, prob_index, fixture_difficulty)
+        base = squad_points(team, prob_index, fixture_difficulty, form_index)
     without = [p for p in team.get("players") or []
                if str(p.get("playerTeamId")) != str(player_team_id)]
     trial = {**team, "players": without}
-    return round(base - squad_points(trial, prob_index, fixture_difficulty), 2)
+    return round(base - squad_points(trial, prob_index, fixture_difficulty, form_index), 2)
 
 
 # How much of a player's reserve price we assume we would actually get. A
@@ -231,13 +239,14 @@ def loss_from_selling(team, player_team_id, prob_index=None,
 SALE_HAIRCUT = 0.90
 
 
-def sellable(team, reserves=None, prob_index=None, fixture_difficulty=None):
+def sellable(team, reserves=None, prob_index=None, fixture_difficulty=None,
+             form_index=None):
     """Every owned player, with what leaving would cost and what he would raise.
 
     Sorted by the cheapest thing to give up first: no points lost, most money
     raised. That is the order a transfer should eat through a squad in.
     """
-    base = squad_points(team, prob_index, fixture_difficulty)
+    base = squad_points(team, prob_index, fixture_difficulty, form_index)
     reserves = reserves or {}
     out = []
     for p in team.get("players") or []:
@@ -252,14 +261,16 @@ def sellable(team, reserves=None, prob_index=None, fixture_difficulty=None):
             "pos": position_of(pm, "?"),
             "value": int(value), "raises": raise_,
             "loss": loss_from_selling(team, ptid, prob_index,
-                                      fixture_difficulty, base=base),
+                                      fixture_difficulty, base=base,
+                                      form_index=form_index),
         })
     out.sort(key=lambda r: (r["loss"], -r["raises"]))
     return out
 
 
 def transfers(ranked, team, money=0, reserves=None, prob_index=None,
-              fixture_difficulty=None, reserve_cash=0, limit=5):
+              fixture_difficulty=None, reserve_cash=0, limit=5,
+              form_index=None):
     """Signings the cash cannot reach, paired with the player who funds them.
 
     The bot could only ever buy what its balance covered, so a squad holding a
@@ -271,7 +282,8 @@ def transfers(ranked, team, money=0, reserves=None, prob_index=None,
     a transfer, it is a downgrade with extra steps.
     """
     spare = max(0, int(num(money)) - int(num(reserve_cash)))
-    give_up = sellable(team, reserves, prob_index, fixture_difficulty)
+    give_up = sellable(team, reserves, prob_index, fixture_difficulty,
+                       form_index=form_index)
     owned_ids = {r["player_id"] for r in give_up}
     out = []
     for buy in ranked:

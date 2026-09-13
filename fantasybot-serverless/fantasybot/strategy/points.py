@@ -83,6 +83,78 @@ def per_start(pm):
     return avg * weight + last * (1 - weight)
 
 
+# How much recent form is allowed to move the season rate, at most. Three
+# gameweeks is a small sample and a hot streak is partly luck, so form TILTS the
+# estimate rather than replacing it: at 0.35 a player in the form of his life
+# gains about a third, and one who has gone cold loses about a third. Letting it
+# run to 1.0 would sell a good player after two quiet afternoons, which is the
+# single most common way a human loses a fantasy league.
+FORM_WEIGHT = 0.35
+
+# Gameweeks of evidence before recent form is trusted at full weight.
+FORM_SAMPLE = 3
+
+# Minutes in a gameweek that count as having actually played. Below it he came
+# on for the last few minutes, which is an appearance in the table and not one
+# for our purposes.
+PLAYED_MINUTES = 20
+
+
+def form_factor(history, season_rate):
+    """How much better or worse than his own season a player has been lately.
+
+    Returns a multiplier around 1.0, or 1.0 when there is nothing to say. It is
+    measured against HIS OWN rate, not the league's: a defender scoring 5s is in
+    great form and a striker scoring 5s is in poor form, and one flat threshold
+    would call them the same thing.
+    """
+    if not history or not season_rate or season_rate <= 0:
+        return 1.0
+    scored = [h["points"] for h in history if h.get("points") is not None]
+    if not scored:
+        return 1.0
+    recent = sum(scored) / len(scored)
+    confidence = min(1.0, len(scored) / FORM_SAMPLE)
+    raw = recent / season_rate
+    # Clamp before weighting: one 20-point haul should not multiply the estimate
+    # by four just because the sample is short.
+    raw = max(0.0, min(2.0, raw))
+    return 1.0 + FORM_WEIGHT * confidence * (raw - 1.0)
+
+
+def start_rate(history):
+    """The share of recent gameweeks he actually played, or None if unknown.
+
+    This is the rotation risk the scraped probability cannot see — and, when the
+    scrape breaks, the only evidence about minutes that is left standing.
+    """
+    if not history:
+        return None
+    known = [h for h in history if h.get("minutes") is not None]
+    if not known:
+        return None
+    played = sum(1 for h in known if (h["minutes"] or 0) >= PLAYED_MINUTES)
+    return played / len(known)
+
+
+def blended_probability(prob_pct, history, weight=0.5):
+    """The scraped start probability, cross-checked against who actually played.
+
+    Neither source is authoritative. The scrape knows about today — an injury
+    announced this morning — and knows nothing about a manager who has quietly
+    stopped picking someone. The appearance record is the reverse. Disagreement
+    between them is information, so they are averaged rather than one being
+    chosen; when only one exists, it stands alone.
+    """
+    rate = start_rate(history)
+    if rate is None:
+        return prob_pct
+    observed = rate * 100.0
+    if prob_pct is None:
+        return observed
+    return prob_pct * (1 - weight) + observed * weight
+
+
 def fixture_factor(pm, difficulty):
     """How much easier or harder than average this week's opponent makes it.
 
@@ -102,14 +174,22 @@ def fixture_factor(pm, difficulty):
     return max(0.1, 1.0 + weight * (1.0 - 2.0 * min(1.0, max(0.0, d))))
 
 
-def expected(pm, prob_pct, difficulty=None):
+def expected(pm, prob_pct, difficulty=None, history=None):
     """Expected points for one gameweek. `prob_pct` is 0-100, or None for "no idea".
 
     None means no data, not zero: treating an unknown as a certainty in either
     direction is how a diagnosis becomes a guess. The caller decides the prior
     (see lineup.caliber_prior) and passes it in.
+
+    `history` is his last few gameweeks (see sources.form). With it, the rate is
+    tilted by recent form and the probability is cross-checked against who
+    actually took the field. Without it, everything behaves exactly as before —
+    the signal improves the estimate when present and never gates it.
     """
-    if prob_pct is None:
+    prob = blended_probability(prob_pct, history)
+    if prob is None:
         return None
-    return (max(0.0, float(prob_pct)) / 100.0 * per_start(pm)
+    rate = per_start(pm)
+    return (max(0.0, float(prob)) / 100.0 * rate
+            * form_factor(history, rate)
             * fixture_factor(pm, difficulty))

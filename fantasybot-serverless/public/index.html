@@ -702,6 +702,12 @@ function render(d){
     +((d.notify||{}).enabled
         ?'<span class="tag ok">'+((d.notify||{}).telegram?'Telegram':'webhook')+'</span>'
         :'<span class="tag warn">apagados</span>')+'</div></div>'
+    +(function(){const f=(d.report||{}).sources&&(d.report||{}).sources.form||null;
+       return f?('<div class="row"><div class="m">Datos por jornada (oficiales)'
+         +'<small>forma reciente y minutos; no dependen del scraping</small></div>'
+         +'<div class="right"><span class="tag '+(f.ok?'ok':'warn')+'">'
+         +(f.ok?f.players+' jugadores · '+f.weeks+' jornadas':'sin datos')
+         +'</span></div></div>'):'';})()
     +'<div class="row"><div class="m">Almacenamiento</div>'
     +'<div class="right">'+esc(d.storage||'?')+'</div></div>';
 

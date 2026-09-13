@@ -66,7 +66,7 @@ DOUBTFUL_DISCOUNT = 0.6  # a 'duda' usually plays: rank below a fit player, ABOV
 _DOUBTFUL_STATUS = ("doubtful", "duda", "warned")
 
 
-def player_score(player, prob_index, fixture_difficulty=None):
+def player_score(player, prob_index, fixture_difficulty=None, form_index=None):
     """Expected points for one gameweek. Returns (score, prob, disponible, tag).
 
     This was `probabilidad + 0.5 × media`, which on a 0-100 probability scale
@@ -119,7 +119,10 @@ def player_score(player, prob_index, fixture_difficulty=None):
     team_id = (pm.get("team") or {}).get("id")
     difficulty = ((fixture_difficulty or {}).get(str(team_id))
                   if team_id is not None else None)
-    return (points_mod.expected(pm, chance, difficulty) or 0.0), prob, disponible, tag
+    # His last few gameweeks, when we have them: they tilt the scoring rate by
+    # recent form and cross-check `chance` against who actually took the field.
+    history = (form_index or {}).get(str(pm.get("id")))
+    return (points_mod.expected(pm, chance, difficulty, history) or 0.0), prob, disponible, tag
 
 
 def _pid(player):
@@ -200,7 +203,8 @@ def _select_coach(players):
     return max(coaches, key=key)
 
 
-def optimize(team, prob_index=None, premium=False, fixture_difficulty=None):
+def optimize(team, prob_index=None, premium=False, fixture_difficulty=None,
+             form_index=None):
     """Computes the best XI + formation. Returns a dict with the proposal and the body.
 
     Every fielded slot is POSITION-VALID: each line is filled only from its own players,
@@ -231,7 +235,8 @@ def optimize(team, prob_index=None, premium=False, fixture_difficulty=None):
         pos = POS.get(position_id(p["playerMaster"]))
         if pos not in by_pos:   # unknown position OR a coach ("ENT"): never an XI line
             continue
-        score, prob, disp, tag = player_score(p, prob_index, fixture_difficulty)
+        score, prob, disp, tag = player_score(p, prob_index, fixture_difficulty,
+                                              form_index)
         entry = _entry(p, score, prob, disp, tag)
         by_pos[pos].append(entry)
         if tag == "not_in_xi" and (entry["valor"] or 0) >= 8_000_000:
