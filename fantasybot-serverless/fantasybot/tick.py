@@ -1250,6 +1250,11 @@ def run_review(ctx, force=False):
                 "lineup": lineup_res, "bids": bids_res, "gaps": gaps_res,
                 "listings": listings,
                 "clauses": clauses, "shield": shield, "matchday": matchday,
+                # The two newest signals, in the answer the deploy check reads.
+                # A phase that runs and reports nothing looks exactly like one
+                # that was never wired up, and that has cost a cycle twice now.
+                "defense": defense,
+                "form": report.get("form"),
                 "sources": sources, "skipped_for_time": skipped,
                 "elapsed": round(ctx.elapsed(), 1),
                 "reminders_queued": reminders,

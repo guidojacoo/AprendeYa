@@ -270,7 +270,7 @@ def sellable(team, reserves=None, prob_index=None, fixture_difficulty=None,
 
 def transfers(ranked, team, money=0, reserves=None, prob_index=None,
               fixture_difficulty=None, reserve_cash=0, limit=5,
-              form_index=None):
+              form_index=None, give_up=None):
     """Signings the cash cannot reach, paired with the player who funds them.
 
     The bot could only ever buy what its balance covered, so a squad holding a
@@ -280,10 +280,17 @@ def transfers(ranked, team, money=0, reserves=None, prob_index=None,
 
     Net points, never gross: a sale that costs more than the signing adds is not
     a transfer, it is a downgrade with extra steps.
+
+    `give_up` is `sellable(team, ...)` when the caller already has it. It is not
+    a micro-optimisation: sellable re-optimises the whole eleven ONCE PER PLAYER
+    to price what losing him costs, so computing it twice in one review is
+    sixteen extra lineup solves and roughly ten seconds of a sixty-second
+    function — time the review then takes out of the phases that spend money.
     """
     spare = max(0, int(num(money)) - int(num(reserve_cash)))
-    give_up = sellable(team, reserves, prob_index, fixture_difficulty,
-                       form_index=form_index)
+    if give_up is None:
+        give_up = sellable(team, reserves, prob_index, fixture_difficulty,
+                           form_index=form_index)
     owned_ids = {r["player_id"] for r in give_up}
     out = []
     for buy in ranked:

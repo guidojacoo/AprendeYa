@@ -181,6 +181,12 @@ jobs:
                                              left_out: .review.listings.left_out?},
                                   gaps: (.review.gaps // null),
                                   squad: (.review.squad // null),
+                                  defensa: {modo: .review.defense.mode?,
+                                            alcance_rival: .review.defense.rival_reach?,
+                                            expuestos: (.review.defense.exposed | length?),
+                                            subidas: (.review.defense.raises | length?),
+                                            coste_por_euro: .review.defense.cost_ratio?},
+                                  form: (.review.form // null),
                                   skipped_phases: (.review.skipped // null),
                                   clock, error}' 2>/dev/null || echo "$BODY"
 

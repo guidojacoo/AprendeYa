@@ -375,6 +375,13 @@ def review(client, days_to_matchday=None):
     # A missing lineup (incomplete squad) only skips the lineup itself — sells, flips,
     # clauses and reminders still apply. sell_candidates handles best=None.
     sells = sell_mod.sell_candidates(team, best, trends_index(), prob_index=prob_index)
+    # What each of ours is worth to the XI, keyed by roster slot — computed ONCE
+    # and read by two consumers. It re-optimises the eleven per player to price
+    # what losing him costs, so a second call is sixteen more lineup solves; the
+    # review paid ten seconds for that before anyone noticed.
+    sell_costs = upgrades.sellable(team, prob_index=prob_index,
+                                   fixture_difficulty=fixture_difficulty,
+                                   form_index=form_index)
 
     # 4) buyout targets + reminders
     targets = clause_targets(market, team, prob_index)
@@ -469,7 +476,7 @@ def review(client, days_to_matchday=None):
         "transfers": upgrades.transfers(
             upgrade_list, team, money=team["teamMoney"],
             prob_index=prob_index, fixture_difficulty=fixture_difficulty,
-            form_index=form_index),
+            form_index=form_index, give_up=sell_costs),
         "gaps": gaps,
         # The ones that stop an XI being fielded at all, as opposed to the ones
         # that merely leave you without a substitute. Only these justify buying
@@ -487,11 +494,7 @@ def review(client, days_to_matchday=None):
         # same question asked in opposite directions, and answering them in the
         # same currency — points per gameweek — is what stops the bot spending
         # money to defend a bench player it was about to list anyway.
-        "points_at_risk": {r["player_team_id"]: r["loss"]
-                           for r in upgrades.sellable(
-                               team, prob_index=prob_index,
-                               fixture_difficulty=fixture_difficulty,
-                               form_index=form_index)},
+        "points_at_risk": {r["player_team_id"]: r["loss"] for r in sell_costs},
         "clause_targets": targets,
         # Whether the per-gameweek stats are actually parsing. A source that
         # returns {} looks exactly like a quiet week, forever.
