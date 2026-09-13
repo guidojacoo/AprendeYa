@@ -28,14 +28,53 @@ from . import lineup as lineup_opt
 # and acting on noise spends real money.
 MIN_GAIN = 0.25
 
+# How often a given starter misses a gameweek: injury, suspension, rotation, a
+# knock on the Friday. Roughly one week in seven across a season.
+#
+# This is what makes a substitute worth anything at all. A backup keeper adds
+# exactly zero points while the first choice is fit, so a measure that only asks
+# "what does he add this week" says never buy one — and then the week the keeper
+# is out there is no legal XI and the gameweek is lost outright. He is not points,
+# he is insurance, and insurance has a price: the loss he prevents times the
+# chance of needing him.
+#
+# It also settles a disagreement between two of this bot's own rules. The squad
+# minimums said buy a second keeper; the upgrade measure said he is worthless.
+# Both were describing the same player badly.
+UNAVAILABILITY = 0.15
+
+
+# A player who cannot score, used to measure a squad that has no goalkeeper.
+_EMPTY_KEEPER = {"playerTeamId": "sim:no-keeper",
+                 "playerMaster": {"id": "sim:no-keeper", "nickname": "—",
+                                  "name": "—", "positionId": 1,
+                                  "marketValue": 0, "playerStatus": "injured",
+                                  "averagePoints": 0, "points": 0,
+                                  "lastSeasonPoints": 0}}
+
 
 def squad_points(team, prob_index=None, fixture_difficulty=None):
-    """Expected points of the best XI this squad can field. 0 if it cannot."""
+    """Expected points of the best XI this squad can field.
+
+    A squad with no goalkeeper does NOT score zero: the ten outfielders still
+    play and still score, LaLiga simply leaves the slot empty. Returning zero
+    here priced a backup keeper at 2.6 points a week — as if his absence cost the
+    whole team — when what he actually prevents is one empty slot.
+
+    So the keeperless world is measured with a keeper who cannot score, which is
+    exactly what an empty slot is.
+    """
     try:
         best = lineup_opt.optimize(team, prob_index,
                                    fixture_difficulty=fixture_difficulty)
     except ValueError:
-        return 0.0          # no goalkeeper: cannot field an XI at all
+        try:
+            best = lineup_opt.optimize(
+                {**team, "players": list(team.get("players") or [])
+                 + [_EMPTY_KEEPER]},
+                prob_index, fixture_difficulty=fixture_difficulty)
+        except ValueError:
+            return 0.0      # not even ten outfielders: nothing to field
     return float(best.get("total") or 0.0)
 
 
@@ -48,13 +87,47 @@ def _as_squad_member(pm):
     return {"playerTeamId": f"sim:{pm.get('id')}", "playerMaster": pm}
 
 
-def gain_from(team, pm, prob_index=None, fixture_difficulty=None, base=None):
-    """Points per gameweek the XI gains by owning this player."""
+def _without_best_in_line(team, pos, prob_index=None, fixture_difficulty=None):
+    """The squad minus its strongest player in one position.
+
+    Not a hypothetical: it is the ordinary state of a squad about one week in
+    seven, and it is the only world in which a substitute is worth anything.
+    """
+    players = team.get("players") or []
+    line = [p for p in players if position_of(p.get("playerMaster")) == pos]
+    if not line:
+        return team
+    best = max(line, key=lambda p: num((p.get("playerMaster") or {})
+                                       .get("marketValue")))
+    return {**team, "players": [p for p in players if p is not best]}
+
+
+def gain_from(team, pm, prob_index=None, fixture_difficulty=None, base=None,
+              with_insurance=True):
+    """Points per gameweek the XI gains by owning this player.
+
+    Two worlds, weighted: the ordinary one where everyone ahead of him is fit,
+    and the one where the best man in his position is missing. A first-choice
+    signing is worth almost all of the first; a substitute is worth only the
+    second, which is small but is not zero — and "not zero" is the difference
+    between fielding ten men and eleven on the week it happens.
+    """
     if base is None:
         base = squad_points(team, prob_index, fixture_difficulty)
     trial = {**team, "players": list(team.get("players") or [])
              + [_as_squad_member(pm)]}
-    return round(squad_points(trial, prob_index, fixture_difficulty) - base, 2)
+    now = squad_points(trial, prob_index, fixture_difficulty) - base
+    if not with_insurance:
+        return round(now, 2)
+
+    pos = position_of(pm)
+    thin = _without_best_in_line(team, pos, prob_index, fixture_difficulty)
+    thin_base = squad_points(thin, prob_index, fixture_difficulty)
+    thin_with = squad_points(
+        {**thin, "players": list(thin.get("players") or [])
+         + [_as_squad_member(pm)]}, prob_index, fixture_difficulty)
+    cover = max(0.0, (thin_with - thin_base) - max(0.0, now))
+    return round(now + UNAVAILABILITY * cover, 2)
 
 
 def players_by_id(market):

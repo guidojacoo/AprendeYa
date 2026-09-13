@@ -16,6 +16,36 @@ from . import points as points_mod
 MIN_SQUAD = {"POR": 2, "DEF": 5, "MED": 5, "DEL": 3}
 
 
+def xi_minimum(premium=False):
+    """The fewest players per line that can still fill a LEGAL formation.
+
+    Different question from MIN_SQUAD, and the difference decides money. Below
+    this the eleven cannot be completed at all and the empty slot scores nothing
+    every single week, so it is worth almost any price. Between this and
+    MIN_SQUAD you have a starter and no cover — worth buying only if the cover
+    pays for itself, which is a question the upgrade engine answers with actual
+    numbers instead of a rule of thumb.
+
+    Derived from the formations LaLiga accepts rather than written down, so it
+    cannot drift away from them.
+    """
+    from .lineup import FORMATIONS, PREMIUM_FORMATIONS
+
+    shapes = list(FORMATIONS) + (list(PREMIUM_FORMATIONS) if premium else [])
+    return {"POR": 1,
+            "DEF": min(d for d, _m, _f in shapes),
+            "MED": min(m for _d, m, _f in shapes),
+            "DEL": min(f for _d, _m, f in shapes)}
+
+
+def blocking_gaps(team, premium=False):
+    """Positions so short that no legal XI can be fielded. These are urgent."""
+    counts = squad_counts(team)
+    floor = xi_minimum(premium)
+    return {pos: floor[pos] - counts[pos]
+            for pos in floor if counts[pos] < floor[pos]}
+
+
 def squad_counts(team):
     counts = {"POR": 0, "DEF": 0, "MED": 0, "DEL": 0}
     for p in team["players"]:

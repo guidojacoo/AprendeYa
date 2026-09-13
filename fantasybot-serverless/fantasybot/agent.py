@@ -454,6 +454,10 @@ def review(client, days_to_matchday=None):
             upgrade_list, team, money=team["teamMoney"],
             prob_index=prob_index, fixture_difficulty=fixture_difficulty),
         "gaps": gaps,
+        # The ones that stop an XI being fielded at all, as opposed to the ones
+        # that merely leave you without a substitute. Only these justify buying
+        # at any price.
+        "blocking_gaps": needs_mod.blocking_gaps(team, premium),
         # What it actually counted, next to what it concluded. "No tengo ningún
         # POR" while three sit in the squad is a claim with no evidence beside
         # it, and chasing that without the counts cost two deploy cycles. If the

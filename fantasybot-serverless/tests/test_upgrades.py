@@ -85,16 +85,35 @@ class WhatASigningIsWorth(unittest.TestCase):
 
 
 class AGapIsJustALargeGain(unittest.TestCase):
-    def test_a_keeper_for_a_squad_with_none_is_worth_the_whole_xi(self):
-        """No goalkeeper means no legal XI at all, so the first one is worth
-        more than any striker — and the gap rule falls out of the same measure
-        instead of needing one of its own."""
-        team = squad()
+    def test_a_squad_with_no_keeper_still_scores_with_ten(self):
+        """This assertion used to demand that the first keeper be worth more
+        than ten points, and it passed — because a keeperless squad was priced
+        at ZERO, as if the other ten did not turn up. LaLiga leaves the slot
+        empty; the outfielders still play. The test was pinning the bug."""
+        team = squad(avg=4)
+        keeperless = {**team, "players": [p for p in team["players"]
+                                          if p["playerMaster"]["positionId"] != "1"]}
+        with_ten = upgrades.squad_points(keeperless, prob_index={})
+        self.assertGreater(with_ten, 10.0, "ten men still score")
+        self.assertLess(with_ten, upgrades.squad_points(team, prob_index={}))
+
+    def test_the_first_keeper_is_worth_the_slot_he_fills(self):
+        team = squad(avg=4)
         team["players"] = [p for p in team["players"]
                            if p["playerMaster"]["positionId"] != "1"]
         cards = {"gk": card("gk", 1, 1_000_000, 3)}
         got = upgrades.rank([op("gk", 1_000_000)], team, cards, prob_index={})
-        self.assertGreater(got[0]["gain"], 10.0)
+        self.assertGreater(got[0]["gain"], upgrades.MIN_GAIN,
+                           "an empty slot is worth filling")
+
+    def test_a_backup_keeper_is_insurance_and_priced_like_it(self):
+        """Zero points while the first choice is fit, and not zero overall:
+        without him, the week the keeper is out, the slot is simply empty."""
+        team = squad(avg=4)
+        cards = {"gk2": card("gk2", 1, 700_000, 3)}
+        got = upgrades.rank([op("gk2", 700_000)], team, cards, prob_index={})
+        self.assertGreater(got[0]["gain"], 0.0)
+        self.assertLess(got[0]["gain"], 1.0, "cover, not a starter")
 
 
 class SpendingTheBudget(unittest.TestCase):

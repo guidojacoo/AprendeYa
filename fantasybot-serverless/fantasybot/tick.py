@@ -476,7 +476,13 @@ def _plan_gap_signings(ctx, lid, team, report):
     than promising the same euros twice.
     """
     needs = report.get("needs") or {}
-    gaps = needs.get("gaps") or {}
+    # Only the positions where no legal eleven can be fielded. Below that floor
+    # the slot scores nothing every week and is worth almost any price; above it
+    # you have a starter and no cover, and whether cover is worth buying is a
+    # question with an actual number behind it — the upgrade engine answers it,
+    # priced as the insurance it is, instead of a squad-size rule of thumb
+    # spending real money on a substitute who would score 0.4 when he plays.
+    gaps = report.get("blocking_gaps") or {}
     if not gaps:
         return {"mode": "on", "queued": [], "committed": 0}
     if not (config.AUTO_BIDS and config.AUTO_EXECUTE) or ctx.dry_run:

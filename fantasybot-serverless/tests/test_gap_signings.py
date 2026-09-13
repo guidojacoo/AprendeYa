@@ -1,9 +1,14 @@
-"""Signing for a position we have nobody in.
+"""Signing for a position that stops the eleven being fielded at all.
 
 This is the difference between a bot that trades well and one that wins. The flip
 engine only bids on PROFITABLE resales, so a squad missing a goalkeeper would sit
 there correctly declining to overpay — fielding ten men and losing points every
 single gameweek. An empty slot costs more than a bad margin.
+
+BLOCKING gaps only. Being a substitute short is a different question with a
+different answer: it is insurance, it has a price, and the upgrade engine puts an
+actual number on it rather than a squad-size rule of thumb spending real money on
+a backup who would score 0.4 on the weeks he plays.
 """
 
 from datetime import timedelta
@@ -35,7 +40,8 @@ class GapSignings(StorageTestCase):
 
     def _plan(self, cands, money=50_000_000, gaps=("POR",)):
         ctx = TickContext(budget_seconds=20, log=lambda m: None)
-        report = {"needs": {"gaps": dict.fromkeys(gaps, 1),
+        report = {"blocking_gaps": dict.fromkeys(gaps, 1),
+                  "needs": {"gaps": dict.fromkeys(gaps, 1),
                             "suggestions": {gaps[0]: cands}}}
         return tick._plan_gap_signings(ctx, "L1", {"teamMoney": money}, report)
 
@@ -89,7 +95,7 @@ class GapSignings(StorageTestCase):
 
     def test_two_gaps_share_one_budget(self):
         ctx = TickContext(budget_seconds=20, log=lambda m: None)
-        report = {"needs": {
+        report = {"blocking_gaps": {"POR": 1, "DEL": 1}, "needs": {
             "gaps": {"POR": 1, "DEL": 1},
             "suggestions": {
                 "POR": [self._cand(max_bid=8_000_000)],
