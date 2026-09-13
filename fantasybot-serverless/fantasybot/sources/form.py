@@ -50,6 +50,14 @@ def _num(v):
         return None
 
 
+def _week_key(k):
+    """Sort gameweek keys numerically: "10" must come after "9", not before."""
+    try:
+        return (0, int(str(k).strip()))
+    except (TypeError, ValueError):
+        return (1, str(k))
+
+
 def _entry(row):
     """One player's line for a gameweek: (id, points, minutes) or None."""
     if not isinstance(row, dict):
@@ -140,7 +148,11 @@ def week(client, week_number):
                         default={}) or {}
 
 
-_STAT_LIST_KEYS = ("playerStats", "stats", "weeks", "weekStats", "points")
+# `weekPoints` is the one the live payload actually carries, next to the season
+# total in `points` and the average in `averagePoints`. The row recorder found
+# it: [averagePoints, id, image, lastSeasonPoints, marketValue, nickname,
+# playerStatus, points, positionId, teamId, weekPoints].
+_STAT_LIST_KEYS = ("weekPoints", "playerStats", "stats", "weeks", "weekStats")
 
 
 def from_player_rows(players):
@@ -160,6 +172,13 @@ def from_player_rows(players):
             got = row.get(key)
             if isinstance(got, list) and got:
                 series = got
+                break
+            if isinstance(got, dict) and got:
+                # Keyed by gameweek ({"1": 4, "2": 11}), so the ORDER has to come
+                # from the keys rather than from insertion: a JSON object makes
+                # no promise about that, and reading it in the wrong order turns
+                # a player finding form into one losing it.
+                series = [got[k] for k in sorted(got, key=_week_key)]
                 break
         if not series:
             continue
@@ -196,8 +215,13 @@ def record_player_shape(players):
         shape = {"row_keys": sorted(row.keys())[:40]}
         for key in _STAT_LIST_KEYS:
             got = row.get(key)
-            if isinstance(got, list) and got and isinstance(got[0], dict):
-                shape[f"{key}[0]_keys"] = sorted(got[0].keys())[:30]
+            if isinstance(got, list) and got:
+                shape[f"{key}[0]"] = (sorted(got[0].keys())[:30]
+                                      if isinstance(got[0], dict)
+                                      else type(got[0]).__name__)
+                shape[f"{key}_len"] = len(got)
+            elif isinstance(got, dict) and got:
+                shape[f"{key}_keys"] = sorted(map(str, got))[:20]
             elif got is not None:
                 shape[key] = type(got).__name__
         get_storage().put_doc("all_players_shape",

@@ -188,6 +188,7 @@ jobs:
                                             coste_por_euro: .review.defense.cost_ratio?},
                                   form: (.review.form // null),
                                   defensa_por_que: .review.defense.why?,
+                                  cajas: .review.defense.reach_detail?,
                                   skipped_phases: (.review.skipped // null),
                                   clock, error}' 2>/dev/null || echo "$BODY"
 

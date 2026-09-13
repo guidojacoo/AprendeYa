@@ -792,6 +792,17 @@ def _plan_clause_defense(ctx, lid, team, report):
                          report.get("points_at_risk") or {},
                          cost_ratio=_clause_cost_ratio(),
                          reserve=config.CASH_RESERVE)
+    # What the reach was built from. A single number is not enough to tell a
+    # rich league from one manager whose history we have misread, and that
+    # distinction decides whether the whole squad looks reachable.
+    got["reach_detail"] = [
+        {"manager": r.get("manager_name"),
+         "estimado": int(num(r.get("estimated_balance"))),
+         "crudo": int(num(r.get("estimated_balance_raw"))),
+         "techo": int(num(r.get("plausible_max"))),
+         "valor_plantel": int(num(r.get("team_value"))),
+         "dudoso": bool(r.get("estimate_suspect"))}
+        for r in (report.get("rivals") or []) if not r.get("is_me")][:6]
     queued = []
     for r in got.get("raises") or []:
         try:

@@ -150,9 +150,24 @@ class ThePerGameweekHistoryComesFromThePlayerRows(StorageTestCase):
                                       for i in range(10)]}])
         self.assertEqual(len(got["7"]), form.WEEKS)
 
-    def test_a_bare_number_series_still_reads(self):
-        got = form.from_player_rows([{"id": 3, "points": [4, 6]}])
+    def test_week_points_is_the_key_the_live_payload_carries(self):
+        """The recorder found it: [averagePoints, id, image, lastSeasonPoints,
+        marketValue, nickname, playerStatus, points, positionId, teamId,
+        weekPoints]. `points` there is the SEASON TOTAL, not a series."""
+        got = form.from_player_rows([{"id": 3, "points": 50,
+                                      "weekPoints": [4, 6]}])
         self.assertEqual([h["points"] for h in got["3"]], [6.0, 4.0])
+
+    def test_the_season_total_is_never_mistaken_for_a_series(self):
+        self.assertEqual(form.from_player_rows([{"id": 3, "points": 50}]), {})
+
+    def test_a_week_keyed_object_is_read_in_gameweek_order(self):
+        """A JSON object makes no promise about key order, and reading it wrong
+        turns a player finding form into one losing it."""
+        got = form.from_player_rows([{"id": 7,
+                                      "weekPoints": {"9": 11, "10": 2, "8": 6}}])
+        self.assertEqual([h["points"] for h in got["7"]], [2.0, 11.0, 6.0],
+                         "week 10 is the most recent, not week 9")
 
     def test_a_row_with_no_breakdown_contributes_nothing(self):
         """The honest answer, rather than a zero that reads as poor form."""
@@ -165,7 +180,7 @@ class ThePerGameweekHistoryComesFromThePlayerRows(StorageTestCase):
                                                     "totalPoints": 3}]}])
         doc = get_storage().get_doc("all_players_shape", {})
         self.assertIn("row_keys", doc["shape"])
-        self.assertIn("playerStats[0]_keys", doc["shape"])
+        self.assertIn("playerStats[0]", doc["shape"])
 
     def test_an_empty_payload_records_nothing_and_does_not_raise(self):
         form.record_player_shape([])
