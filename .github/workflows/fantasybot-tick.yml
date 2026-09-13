@@ -187,6 +187,7 @@ jobs:
                                             subidas: (.review.defense.raises | length?),
                                             coste_por_euro: .review.defense.cost_ratio?},
                                   form: (.review.form // null),
+                                  defensa_por_que: .review.defense.why?,
                                   skipped_phases: (.review.skipped // null),
                                   clock, error}' 2>/dev/null || echo "$BODY"
 

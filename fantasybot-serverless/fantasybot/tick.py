@@ -455,6 +455,32 @@ def _apply_best_lineup(ctx, client, lid, tid, team):
     return {"status": "ok", "why": explain.lineup(res, best), **res}
 
 
+def _rival_reach(report):
+    """The richest rival's estimated cash, and why it is zero when it is.
+
+    The key is `estimated_balance`. It was read as `cash` in two places, which
+    is not a name that exists anywhere in the rivals analysis, so both of them
+    quietly saw a league with no money in it: the bid cap never capped anything
+    and the clause defence found nobody exposed, both while reporting normally.
+    A wrong key fails exactly like a quiet league, which is why this returns the
+    reason alongside the number instead of just the number.
+    """
+    rivals = report.get("rivals") or []
+    if not rivals:
+        return 0, "todavía no leí la actividad de la liga"
+    if any(r.get("partial_history") for r in rivals):
+        # An estimate built from a history we have not finished reading is not a
+        # ceiling, it is a guess that is still climbing.
+        return 0, "todavía estoy reconstruyendo la caja de los rivales"
+    others = [r for r in rivals if not r.get("is_me")]
+    if not others:
+        return 0, "no veo rivales en la liga"
+    reach = max((int(num(r.get("estimated_balance"))) for r in others), default=0)
+    if reach <= 0:
+        return 0, "no pude estimar la caja de ningún rival"
+    return reach, None
+
+
 def _plan_bids(ctx, client, lid, team, report):
     """Turn profitable flips into SCHEDULED bids instead of immediate ones.
 
@@ -499,12 +525,10 @@ def _plan_bids(ctx, client, lid, team, report):
         plan = execute_mod.plan_bids(client, lid, team)
     # Nobody in the league can outbid money they do not have. The richest rival's
     # estimated cash is the real ceiling on what any auction can cost us.
-    rivals = report.get("rivals") or []
     # A cash estimate built from a partially backfilled history is not a ceiling,
     # it is a guess — and guessing LOW loses auctions. Until the history is
     # complete the cap stands as computed.
-    reach = 0 if any(r.get("partial_history") for r in rivals) else max(
-        ((r.get("cash") or 0) for r in rivals if not r.get("is_me")), default=0)
+    reach, _ = _rival_reach(report)
     scheduled, skipped = [], []
     # `plan_bids` already fits the targets inside the balance, cheapest commitment
     # first; we only add the timing.
@@ -746,15 +770,12 @@ def _plan_clause_defense(ctx, lid, team, report):
     """
     if not (config.AUTO_RAISE_CLAUSE and config.AUTO_EXECUTE) or ctx.dry_run:
         return {"mode": "off", "raises": []}
-    rivals = report.get("rivals") or []
-    if any(r.get("partial_history") for r in rivals):
-        # The reach estimate is built from transactions we have not finished
-        # reading. Defending against a number that is still climbing means
-        # paying twice for the same protection.
-        return {"mode": "waiting", "raises": [],
-                "why": "todavía estoy reconstruyendo la caja de los rivales"}
-    reach = max(((r.get("cash") or 0) for r in rivals if not r.get("is_me")),
-                default=0)
+    reach, blocked = _rival_reach(report)
+    if blocked:
+        # Defending against a number we cannot read means either paying twice
+        # for the same protection or, as happened here, never defending at all
+        # while reporting that nobody is exposed.
+        return {"mode": "waiting", "raises": [], "why": blocked}
     got = clausedef.plan(team, reach, num(team.get("teamMoney")),
                          report.get("points_at_risk") or {},
                          cost_ratio=_clause_cost_ratio(),
@@ -1254,7 +1275,14 @@ def run_review(ctx, force=False):
                 # A phase that runs and reports nothing looks exactly like one
                 # that was never wired up, and that has cost a cycle twice now.
                 "defense": defense,
-                "form": report.get("form"),
+                # When the per-gameweek stats did not parse, the payload's own
+                # shape travels with the answer. It is the only way to write the
+                # parser from here: the endpoint cannot be called from a laptop,
+                # so the first live run IS the documentation. Keys only, and it
+                # disappears from the response the moment it starts working.
+                "form": (report.get("form") if (report.get("form") or {}).get("ok")
+                         else {**(report.get("form") or {}),
+                               "shape": store.get_doc("week_stats_shape", {})}),
                 "sources": sources, "skipped_for_time": skipped,
                 "elapsed": round(ctx.elapsed(), 1),
                 "reminders_queued": reminders,
