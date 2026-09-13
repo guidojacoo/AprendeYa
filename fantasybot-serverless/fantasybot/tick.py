@@ -44,6 +44,12 @@ REVIEW_LOCK = "review"
 _SPENDING_PHASES = ("gap_signings", "listings", "bids", "clauses",
                     "clause_defense")
 
+# How far past the biggest transfer the league has actually completed we still
+# treat a rival as able to reach. Somebody can always spend more than they ever
+# have — but not ten times more, and defending against a number nobody has come
+# close to costs real money for nothing.
+OBSERVED_SPEND_HEADROOM = 2.0
+
 # Runtime knobs that live in the DB (settings table) and fall back to env config,
 # so cadence can be retuned from the dashboard without a redeploy.
 _SETTING_DEFAULTS = {
@@ -479,17 +485,32 @@ def _rival_reach(report):
     others = [r for r in rivals if not r.get("is_me")]
     if not others:
         return 0, "no veo rivales en la liga"
-    # The MAXIMUM of a noisy estimator picks whichever manager's history is most
-    # incomplete, which is the opposite of what a ceiling is for. Estimates the
-    # analysis could not make add up are dropped rather than topping the list.
-    credible = [r for r in others if not r.get("estimate_suspect")]
-    if not credible:
-        return 0, ("las estimaciones de caja no cierran; me falta historial "
-                   "de la liga")
-    reach = max((int(num(r.get("estimated_balance"))) for r in credible),
-                default=0)
-    if reach <= 0:
-        return 0, "no pude estimar la caja de ningún rival"
+    # What the league has SHOWN it will pay, not what we think it is holding.
+    #
+    # The estimate was the only signal here and it does not survive contact with
+    # the data: one manager came out at 159M holding the SMALLEST squad in the
+    # league, while a rival with three times his squad estimated at 4.9M. The
+    # ordering does not correlate with anything, because the error is unread
+    # purchases and that varies per manager rather than cancelling out.
+    #
+    # The biggest transfer a rival has actually completed is a price somebody
+    # paid, in the league's own activity feed. It cannot be wrong, only stale,
+    # and stale in the safe direction: it grows the moment anyone spends more.
+    # So it leads, with room for a rival to go further than he ever has, and the
+    # estimate is only allowed to raise the bar within reach of what the league
+    # has demonstrated. A number nobody has come close to spending is not a
+    # threat to defend a squad against — it is a reason to spend our own money
+    # on nothing.
+    observed = max((int(num(r.get("max_purchase"))) for r in others), default=0)
+    estimated = max((int(num(r.get("estimated_balance"))) for r in others
+                     if not r.get("estimate_suspect")), default=0)
+    if observed <= 0:
+        # Nobody has bought anything yet, so there is no demonstrated spending
+        # to reason from. Early in a season this is ordinary, not broken.
+        if estimated <= 0:
+            return 0, "todavía no vi a ningún rival gastar"
+        return estimated, None
+    reach = min(max(observed, estimated), round(observed * OBSERVED_SPEND_HEADROOM))
     return reach, None
 
 
@@ -797,9 +818,8 @@ def _plan_clause_defense(ctx, lid, team, report):
     # distinction decides whether the whole squad looks reachable.
     got["reach_detail"] = [
         {"manager": r.get("manager_name"),
+         "mayor_compra": int(num(r.get("max_purchase"))),
          "estimado": int(num(r.get("estimated_balance"))),
-         "crudo": int(num(r.get("estimated_balance_raw"))),
-         "techo": int(num(r.get("plausible_max"))),
          "valor_plantel": int(num(r.get("team_value"))),
          "dudoso": bool(r.get("estimate_suspect"))}
         for r in (report.get("rivals") or []) if not r.get("is_me")][:6]

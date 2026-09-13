@@ -17,9 +17,14 @@ from fantasybot import tick
 from tests.support import StorageTestCase
 
 
-def _rival(balance, **kw):
+def _rival(balance, spent=None, **kw):
+    """A rival row. `spent` is the biggest transfer they have actually made —
+    the observed fact the reach now leads with; it defaults to something
+    comfortably above the estimate so tests about the ESTIMATE are not
+    accidentally testing the headroom clamp."""
     row = {"estimated_balance": balance, "is_me": False,
-           "partial_history": False, "manager_name": "Rival"}
+           "partial_history": False, "manager_name": "Rival",
+           "max_purchase": balance if spent is None else spent}
     row.update(kw)
     return row
 
@@ -54,7 +59,7 @@ class ReachReadsTheProducersKey(StorageTestCase):
         """Silence is what let this run for a day. Each way of reaching zero
         has to name itself so the next one is visible the first time."""
         for report, expect in (({"rivals": []}, "actividad"),
-                               ({"rivals": [_rival(0)]}, "estimar"),
+                               ({"rivals": [_rival(0, spent=0)]}, "gastar"),
                                ({"rivals": [_rival(9, is_me=True)]}, "rivales")):
             got, why = tick._rival_reach(report)
             self.assertEqual(got, 0)
@@ -91,17 +96,18 @@ class AnEstimateThatDoesNotAddUpIsNotACeiling(StorageTestCase):
 
     def test_a_suspect_estimate_does_not_top_the_list(self):
         got, why = tick._rival_reach({"rivals": [
-            _rival(159_647_614, estimate_suspect=True),
-            _rival(6_200_000)]})
+            _rival(159_647_614, spent=3_000_000, estimate_suspect=True),
+            _rival(6_200_000, spent=3_500_000)]})
         self.assertEqual(got, 6_200_000)
         self.assertIsNone(why)
 
-    def test_all_suspect_means_no_ceiling_at_all(self):
+    def test_a_suspect_estimate_cannot_raise_the_bar(self):
+        """Only what the league has demonstrated is left standing."""
         got, why = tick._rival_reach({"rivals": [
-            _rival(159_647_614, estimate_suspect=True),
-            _rival(140_000_000, estimate_suspect=True)]})
-        self.assertEqual(got, 0)
-        self.assertIn("historial", why)
+            _rival(159_647_614, spent=6_000_000, estimate_suspect=True),
+            _rival(140_000_000, spent=4_000_000, estimate_suspect=True)]})
+        self.assertEqual(got, 6_000_000)
+        self.assertIsNone(why)
 
     def test_the_estimate_is_bounded_by_what_could_exist(self):
         """Starting money, plus everything they could have sold, plus winnings."""
@@ -125,3 +131,38 @@ class AnEstimateThatDoesNotAddUpIsNotACeiling(StorageTestCase):
         from fantasybot.strategy.rivals import bound_balance
         est, _, _, _ = bound_balance(15_000_000, -20_000_000, 40_000_000)
         self.assertEqual(est, -4_000_000)
+
+
+class WhatTheLeagueHasActuallyPaid(StorageTestCase):
+    """The estimate did not survive contact with the data: one manager came out
+    at 159M holding the SMALLEST squad in the league, while a rival with three
+    times his squad estimated at 4.9M. The ordering correlates with nothing,
+    because the error is unread purchases and that varies per manager instead of
+    cancelling out.
+
+    The biggest transfer a rival has actually completed is a price somebody
+    paid, in the league's own feed. It cannot be wrong, only stale — and stale
+    in the safe direction, since it grows the moment anyone spends more."""
+
+    def test_demonstrated_spending_sets_the_floor(self):
+        got, _ = tick._rival_reach({"rivals": [
+            _rival(1_000_000, spent=9_000_000)]})
+        self.assertGreaterEqual(got, 9_000_000,
+                                "somebody paid this; it is not a guess")
+
+    def test_an_estimate_may_raise_the_bar_within_reach_of_the_evidence(self):
+        got, _ = tick._rival_reach({"rivals": [
+            _rival(14_000_000, spent=9_000_000)]})
+        self.assertEqual(got, 14_000_000)
+
+    def test_but_not_to_a_number_nobody_has_come_near(self):
+        """Defending against 159M in a league whose biggest deal is 9M costs
+        real money for nothing."""
+        got, _ = tick._rival_reach({"rivals": [
+            _rival(159_647_614, spent=9_000_000)]})
+        self.assertEqual(got, 18_000_000)
+
+    def test_a_league_that_has_not_spent_yet_is_not_broken(self):
+        got, why = tick._rival_reach({"rivals": [_rival(6_000_000, spent=0)]})
+        self.assertEqual(got, 6_000_000)
+        self.assertIsNone(why)

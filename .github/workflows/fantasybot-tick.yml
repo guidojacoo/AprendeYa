@@ -189,6 +189,7 @@ jobs:
                                   form: (.review.form // null),
                                   defensa_por_que: .review.defense.why?,
                                   cajas: .review.defense.reach_detail?,
+                                  minutos: .review.form.minutes?,
                                   skipped_phases: (.review.skipped // null),
                                   clock, error}' 2>/dev/null || echo "$BODY"
 

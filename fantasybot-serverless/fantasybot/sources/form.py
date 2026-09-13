@@ -253,10 +253,22 @@ def history(client, current_week, weeks=WEEKS):
 
 
 def describe(index):
-    """Whether this source is actually working, for the sources check."""
-    players = len(index or {})
+    """Whether this source is actually working, for the sources check.
+
+    `minutes` is reported separately because the two halves can arrive apart:
+    the live payload carries `weekPoints` and no minutes field, so form works
+    and the rotation cross-check does not. A player who did not play scores
+    zero, so his absence still shows up in the form factor — but a zero is not
+    the same statement as "did not take the field", and reporting the two as one
+    number would hide which of them we actually have.
+    """
+    index = index or {}
+    players = len(index)
+    with_minutes = sum(1 for v in index.values()
+                       if any(h.get("minutes") is not None for h in v))
     return {"ok": players > 0, "players": players,
-            "weeks": max((len(v) for v in (index or {}).values()), default=0)}
+            "weeks": max((len(v) for v in index.values()), default=0),
+            "minutes": with_minutes}
 
 
 __all__ = ["history", "week", "parse_week", "describe", "WEEKS",

@@ -51,6 +51,11 @@ def parse_activity(activity_feed: List[Dict[str, Any]]) -> Dict[int, Dict[str, A
                 "prizes": 0,
                 "transactions_count": 0,
                 "net_profit": 0,
+                # The biggest single thing this manager has actually bought.
+                # Not an estimate of anything — it is a price they paid, in the
+                # league's own activity feed, and it is the only statement about
+                # a rival's spending power that cannot be wrong.
+                "max_purchase": 0,
             }
         return stats[uid_int]
 
@@ -67,6 +72,7 @@ def parse_activity(activity_feed: List[Dict[str, Any]]) -> Dict[int, Dict[str, A
         if atype == TYPE_MARKET_BUY:
             if e1 is not None:
                 e1["purchases"] += amount
+                e1["max_purchase"] = max(e1["max_purchase"], amount)
         elif atype == TYPE_MARKET_SELL:
             if e1 is not None:
                 e1["sales"] += amount
@@ -74,6 +80,7 @@ def parse_activity(activity_feed: List[Dict[str, Any]]) -> Dict[int, Dict[str, A
             # u1 buys from u2
             if e1 is not None:
                 e1["purchases"] += amount
+                e1["max_purchase"] = max(e1["max_purchase"], amount)
             e2 = _get_entry(u2)
             if e2 is not None:
                 e2["sales"] += amount
@@ -309,6 +316,7 @@ def analyze_rivals(
             "prizes": 0,
             "transactions_count": 0,
             "net_profit": 0,
+            "max_purchase": 0,
         })
 
         players = t.get("players") or []
@@ -344,6 +352,7 @@ def analyze_rivals(
             "initial_cash": initial_cash,
             "estimated_balance": est_balance,
             "estimated_balance_raw": raw_balance,
+            "max_purchase": m_flow.get("max_purchase", 0),
             "estimate_suspect": estimate_suspect,
             "plausible_max": plausible_max,
             "known_balance": known_balance,
