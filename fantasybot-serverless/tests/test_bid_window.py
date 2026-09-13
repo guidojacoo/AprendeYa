@@ -152,3 +152,25 @@ class TheRetryBudgetCountsRefusals(StorageTestCase):
         self.assertEqual(last["status"], PENDING,
                          "one failure after four good runs is not a dead action")
         self.assertEqual(last["failures"], 1)
+
+
+class ABidThatAppearsMidPoll(StorageTestCase):
+    def test_it_is_guarded_like_any_other(self):
+        """Another tick placed it, or a send we thought had failed landed. We
+        are in the auction either way, so walking away is the one wrong move."""
+        close = utcnow() + timedelta(minutes=20)
+        client = FakeClient([listing("m1", close.isoformat(), value=10_000_000)])
+        original = client.market
+
+        def _market(league_id):
+            rows = original(league_id)
+            if client.market_calls > 1:
+                return [listing("m1", close.isoformat(), value=10_000_000,
+                                bids=2, mine={"id": "b1", "money": 10_000_010})]
+            return rows
+
+        client.market = _market
+        res = bidding.snipe("L", "m1", 11_000_000, client=client, poll=0.01,
+                            budget_seconds=5, log=lambda m: None)
+        self.assertEqual(res["status"], "raised")
+        self.assertEqual(client.bids, [], "it must never bid a second time")

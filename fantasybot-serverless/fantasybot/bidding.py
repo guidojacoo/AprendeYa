@@ -242,7 +242,6 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
 
     Returns a dict whose "status" is one of:
       bid       we placed it (amount / bid_id in the dict)
-      already   we already had a bid on this listing — nothing to do
       gone      the listing is no longer in the market (closed or bought)
       closed    the close time passed without the conditions to bid
       unpriced  no usable value, so no bid could be sized
@@ -309,9 +308,14 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
         if not el:
             log(f"[bid] {nombre}: no longer in the market. Done.")
             return {"status": "gone", "market_id": market_id, "nombre": nombre}
-        if _our_bid(el):
-            return {"status": "already", "market_id": market_id, "nombre": nombre,
-                    "bid": _our_bid(el)}
+        mine = _our_bid(el)
+        if mine:
+            # A bid appeared while we were polling — another tick placed it, or
+            # a send we thought had failed actually landed. Same situation as
+            # finding one on entry, so the same answer: guard it, don't walk
+            # away from an auction we are now in.
+            return _guard(fc, league_id, market_id, nombre, el, mine, roof,
+                          close_iso, dry_run, log)
         value = _current_value(el)
         if not value:  # no usable price -> can't size a bid (and would crash the f-string)
             log(f"[bid] {nombre}: no market value; can't price a bid.")
