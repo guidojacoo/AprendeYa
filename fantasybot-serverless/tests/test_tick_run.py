@@ -97,8 +97,16 @@ class SleepHint(StorageTestCase):
         scheduler.schedule_bid("L", "m1", 1_000_000,
                                utcnow() + timedelta(seconds=300))
         hint = tick._sleep_hint()
-        # 300s to the close, minus the 60s lead the bid action is queued at.
-        self.assertTrue(230 <= hint <= 245, f"unexpected hint: {hint}")
+        # The close is 300s out and the bid is queued a full lead ahead of it,
+        # so it is already due: nothing to sleep for.
+        self.assertEqual(hint, 0, f"unexpected hint: {hint}")
+
+    def test_seconds_until_a_bid_that_is_not_due_yet(self):
+        from fantasybot import config, scheduler
+        close = utcnow() + timedelta(seconds=config.BID_LEAD_SECONDS + 300)
+        scheduler.schedule_bid("L", "m1", 1_000_000, close)
+        hint = tick._sleep_hint()
+        self.assertTrue(285 <= hint <= 300, f"unexpected hint: {hint}")
 
     def test_never_negative(self):
         from fantasybot import scheduler

@@ -28,12 +28,12 @@ import time
 from datetime import datetime, timezone
 
 from .api import FantasyClient
-from . import events, state
+from . import config, events, state
 from .matching import num
 
 CONTESTED_MARGIN_PCT = 0.03   # how far above value to bid if there's competition
 UNCONTESTED_CUSHION = 10      # minimum cushion if nobody else bids
-DEFAULT_FINAL = 15           # seconds before close for the finish
+DEFAULT_FINAL = config.BID_FINAL_SECONDS   # seconds before close for the finish
 DEFAULT_POLL = 3             # how often, in seconds, to poll in the final minute
 
 
@@ -136,6 +136,105 @@ def _our_bid(row):
     return row.get("bid") or row.get("offer") or None
 
 
+def _bid_amount(mine):
+    """What our standing bid is worth, whatever LaLiga called the field."""
+    if not isinstance(mine, dict):
+        return num(mine)
+    for key in ("money", "amount", "bid", "value"):
+        got = num(mine.get(key))
+        if got:
+            return got
+    return 0
+
+
+def _rivals_on(row, mine):
+    """How many bids on this listing are NOT ours.
+
+    `numberOfBids` counts the whole auction, ours included. Reading it as the
+    competition once we have bid is how a bot talks itself into outbidding
+    itself: one bid on the listing, it is mine, and the "contested" price fires.
+    """
+    total = int(num(row.get("numberOfBids", 0)))
+    return max(0, total - (1 if mine else 0))
+
+
+def guard_bid(row, mine, ceiling, value=None):
+    """How much to RAISE a standing bid to, or None to leave it alone.
+
+    Bidding five minutes out buys room to retry a refused bid, and costs the
+    sealed timing: rivals watch the bid count rise and still have five minutes
+    to answer. This is what pays that back. We keep the watch after placing the
+    bid, and when somebody else joins the auction we raise to the contested
+    price — the same number `decide` would have chosen had we still been
+    waiting — instead of standing down and losing to a later bid.
+
+    Only ever upward, never past the ceiling, and never when we are already at
+    or above the contested price. Nothing here re-enters an auction we are not
+    already in: no standing bid means nothing to guard.
+    """
+    if not mine:
+        return None
+    rivals = _rivals_on(row, mine)
+    if rivals <= 0:
+        return None            # still the only bid; raising would bid against ourselves
+    if value is None:
+        value = max(num(row.get("salePrice")),
+                    num((row.get("playerMaster") or {}).get("marketValue")))
+    if not value:
+        return None
+    target = decide(value, rivals, 0, ceiling)
+    if target is None:
+        return None            # the ceiling is under the value: no legal raise exists
+    current = _bid_amount(mine)
+    return target if target > current else None
+
+
+def _guard(fc, league_id, market_id, nombre, row, mine, roof, close_iso,
+           dry_run, log):
+    """Hold a bid we already placed: raise it if the auction turned contested.
+
+    Returns `guarding` while the bid is still the right one, and asks to be
+    called again until the listing closes — that watch is the whole point of
+    bidding early. `raised` when it moved, which is the case the old
+    stand-down lost outright.
+    """
+    left = _seconds_left(close_iso) if close_iso else 0
+    target = guard_bid(row, mine, roof)
+    if target is None:
+        log(f"[bid] {nombre}: our bid stands "
+            f"({_bid_amount(mine):,} of a {roof:,} ceiling, {int(left)}s left).")
+        return {"status": "guarding", "market_id": market_id, "nombre": nombre,
+                "bid": mine, "amount": _bid_amount(mine),
+                "rivals": _rivals_on(row, mine), "seconds_left": int(left),
+                "retry": left > 0}
+    bid_id = mine.get("id") if isinstance(mine, dict) else None
+    if not bid_id:
+        # Without an id there is nothing to modify, and cancel-then-rebid would
+        # drop us out of the auction for however long the second call takes.
+        # Keeping the lower bid beats risking no bid at all.
+        log(f"[bid] {nombre}: a rival joined but our bid carries no id; "
+            f"leaving it at {_bid_amount(mine):,}.")
+        return {"status": "guarding", "market_id": market_id, "nombre": nombre,
+                "bid": mine, "amount": _bid_amount(mine),
+                "why": "sin id de puja para modificarla", "retry": left > 0}
+    if dry_run:
+        log(f"[bid] {nombre}: WOULD RAISE to {target:,} ({int(left)}s left)")
+        return {"status": "raised", "dry_run": True, "amount": target,
+                "market_id": market_id, "nombre": nombre, "retry": left > 0}
+    resp = fc.modify_bid(league_id, market_id, bid_id, target)
+    log(f"[bid] {nombre}: RAISED {_bid_amount(mine):,} -> {target:,} "
+        f"({int(left)}s left)")
+    events.emit("bid", f"Subo la puja por {nombre}: {target:,} €",
+                detail={"antes": f"{_bid_amount(mine):,} €",
+                        "rivales": _rivals_on(row, mine),
+                        "quedaban": f"{int(left)}s",
+                        "why": "entró otro postor y mi puja se quedaba corta"})
+    return {"status": "raised", "amount": target, "market_id": market_id,
+            "nombre": nombre, "previous": _bid_amount(mine),
+            "rivals": _rivals_on(row, mine), "bid_id": bid_id,
+            "response": resp, "retry": left > 0}
+
+
 def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
           poll=DEFAULT_POLL, dry_run=False, log=print, client=None,
           budget_seconds=None, last_call_seconds=0, ceiling=None):
@@ -148,6 +247,8 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
       closed    the close time passed without the conditions to bid
       unpriced  no usable value, so no bid could be sized
       over_cap  the live value is above what we may pay — no legal bid exists
+      raised    we already had a bid, a rival joined, and we raised it
+      guarding  we already have a bid and it is still the best move; watch on
       waiting   still too early AND the budget ran out; call again later
     `budget_seconds=None` means "no budget": poll until the close (CLI behaviour).
 
@@ -170,11 +271,16 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
     if not el:
         log(f"[bid] marketId {market_id} is not in the market (already closed?).")
         return {"status": "gone", "market_id": market_id}
-    if _our_bid(el):
-        log(f"[bid] {market_id}: we already have a bid on this listing. Standing down.")
-        return {"status": "already", "market_id": market_id, "bid": _our_bid(el)}
     close_iso = el.get("expirationDate")
     nombre = el["playerMaster"].get("nickname", market_id)
+    roof = ceiling if ceiling is not None else round(max_bid * (1 + VALUE_DRIFT))
+    mine = _our_bid(el)
+    if mine:
+        # We are already in this auction. Standing down was right when the bid
+        # went in at fifteen seconds — nobody could answer it. Bidding five
+        # minutes out, they can, so this is where that is paid back.
+        return _guard(fc, league_id, market_id, nombre, el, mine, roof,
+                      close_iso, dry_run, log)
     if not close_iso:
         log(f"[bid] {nombre}: no close date; can't time it. Done.")
         return {"status": "closed", "market_id": market_id, "nombre": nombre}

@@ -33,7 +33,14 @@ class TestMatching(unittest.TestCase):
 
 class TestBidDecision(unittest.TestCase):
     def test_wait_when_early_and_uncontested(self):
-        self.assertIsNone(decide(1_000_000, 0, 300, 2_000_000))
+        """Early is now anything outside the five-minute window, not the last
+        fifteen seconds: a refused bid needs somewhere to be retried."""
+        self.assertIsNone(decide(1_000_000, 0, 1800, 2_000_000))
+        self.assertIsNone(decide(1_000_000, 0, 301, 2_000_000))
+
+    def test_the_window_opens_five_minutes_out(self):
+        self.assertEqual(decide(1_000_000, 0, 299, 2_000_000),
+                         1_000_000 + UNCONTESTED_CUSHION)
 
     def test_last_second_uncontested(self):
         self.assertEqual(decide(1_000_000, 0, 10, 2_000_000),

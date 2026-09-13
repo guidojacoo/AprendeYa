@@ -553,7 +553,8 @@ function render(d){
   const BID={bid:['ok','pujó'],already:['idle','ya tenía puja'],
     gone:['bad','el anuncio ya no estaba'],closed:['bad','cerró sin pujar'],
     waiting:['warn','esperando el cierre'],unpriced:['warn','sin precio usable'],
-    over_cap:['warn','se pasó de mi techo']};
+    over_cap:['warn','se pasó de mi techo'],raised:['ok','subió la puja'],
+    guarding:['idle','vigilando su puja']};
   const bidrows=[];
   (d.executions||[]).forEach(x=>((x.summary||{}).actions||[]).forEach(a=>{
     if(a.type!=='bid')return;
@@ -565,6 +566,10 @@ function render(d){
             :a.status==='failed'?'falló':(k?k[1]:(r.status||a.status)),
       amount:r.amount,
       why:r.last_call?'Pujó antes de tiempo: no quedaba otra ejecución antes del cierre.'
+          :r.status==='raised'
+            ?('Entró otro postor, subí de '+short(r.previous)+' a '+short(r.amount)+'.')
+          :r.status==='guarding'
+            ?(r.why||'Mi puja sigue siendo la buena; la vigilo hasta el cierre.')
           :r.status==='over_cap'
             ?('Subió a '+short(r.value)+' y mi techo era '+short(r.ceiling)
               +'. LaLiga rechaza cualquier puja por debajo del valor actual.')

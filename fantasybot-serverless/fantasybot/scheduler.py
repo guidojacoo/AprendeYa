@@ -177,16 +177,24 @@ def _run_one(store, action, ctx, now, log):
     try:
         result = fn(ctx, action) or {}
     except Exception as e:               # noqa: BLE001 - one bad action, not a dead tick
-        attempts = action.get("attempts") or 1
+        # FAILURES, not claims. `attempts` counts every time an action is picked
+        # up, which since bids started guarding themselves means a bid that went
+        # in perfectly can be claimed five times before anything goes wrong — and
+        # then one transient network error would land past the limit and fail it
+        # for good. The limit is there to stop us hammering an endpoint that is
+        # clearly refusing us, so it counts the refusals.
+        failures = int((action.get("result") or {}).get("failures") or 0) + 1
         # Retrying is only safe because every executor re-checks the world before
         # it acts (see guard 3 above). Past a few tries we stop and leave it FAILED
         # rather than hammering an endpoint that is clearly refusing us.
-        status = PENDING if attempts < ctx.max_attempts else FAILED
-        store.finish_action(action, status, error=f"{type(e).__name__}: {e}")
+        status = PENDING if failures < ctx.max_attempts else FAILED
+        store.finish_action(action, status, error=f"{type(e).__name__}: {e}",
+                            result={"failures": failures})
         events.emit("error", f"Falló la acción {atype}: {e}", status="error",
-                    detail={"key": key, "attempt": attempts})
-        log(f"[tick] {atype} {key} FAILED (attempt {attempts}): {e}")
-        return {"key": key, "type": atype, "status": status, "error": str(e)}
+                    detail={"key": key, "intento": failures})
+        log(f"[tick] {atype} {key} FAILED (attempt {failures}): {e}")
+        return {"key": key, "type": atype, "status": status, "error": str(e),
+                "failures": failures}
 
     # "retry" lets an executor say "nothing happened yet, ask me again" — the
     # sniper uses it when its budget ran out before the close.
@@ -197,6 +205,8 @@ def _run_one(store, action, ctx, now, log):
     # reported status "bid", and nothing downstream could tell completion from
     # a retry.
     if result.get("retry"):
+        # A run that worked clears the failure count: three refusals in a row is
+        # a broken action, three spread across an afternoon of guarding is not.
         store.finish_action(action, PENDING, result=result)
         return {"key": key, "type": atype, "status": PENDING, "result": result}
 

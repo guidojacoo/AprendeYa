@@ -35,14 +35,16 @@ class SnipeOutcomes(StorageTestCase):
     def test_it_bids_rather_than_hand_back_a_watch_nobody_will_take(self):
         """The bug that cost two signings.
 
-        The lead is 60s, a tick can hold about 32 of them, and the final window
-        starts at 15s. So the watch was handed back at ~25s to close and the next
-        tick — a minute later, on a one-minute clock — found the listing gone.
-        The auction was attended by nobody and the bid was never sent.
+        With a fifteen-second window the watch was handed back at ~25s to close
+        and the next tick — a minute later, on a one-minute clock — found the
+        listing gone. The auction was attended by nobody and the bid was never
+        sent. The default window is five minutes now, which removes the gap this
+        was covering, so the window is pinned explicitly: the mechanism has to
+        keep working for anyone who configures it back down.
         """
         close = utcnow() + timedelta(seconds=40)
         client = FakeClient([listing("m1", close.isoformat(), value=10_000_000)])
-        res = bidding.snipe("L", "m1", 11_000_000, client=client,
+        res = bidding.snipe("L", "m1", 11_000_000, client=client, final=15,
                             budget_seconds=0.5, last_call_seconds=70,
                             log=lambda m: None)
         self.assertEqual(res["status"], "bid")
@@ -73,10 +75,10 @@ class SnipeOutcomes(StorageTestCase):
 
     def test_without_a_last_call_window_the_old_behaviour_stands(self):
         """The CLI passes no budget and holds to the close itself; nothing there
-        should start bidding early."""
+        should bid before its window opens."""
         close = utcnow() + timedelta(seconds=40)
         client = FakeClient([listing("m1", close.isoformat(), value=10_000_000)])
-        res = bidding.snipe("L", "m1", 11_000_000, client=client,
+        res = bidding.snipe("L", "m1", 11_000_000, client=client, final=15,
                             budget_seconds=0.5, log=lambda m: None)
         self.assertEqual(res["status"], "waiting")
         self.assertEqual(client.bids, [])
@@ -99,12 +101,19 @@ class SnipeOutcomes(StorageTestCase):
         self.assertEqual(client.bids[0]["amount"], 10_050_000)
 
     def test_our_existing_bid_stops_it_before_anything_is_sent(self):
+        """It no longer walks away — it guards — but it still sends nothing.
+
+        Standing down was the whole response when the bid went in at fifteen
+        seconds, because nobody could answer it. Five minutes out they can, so
+        the watch stays on. What must not change is this: an auction we are
+        already in never gets a second bid.
+        """
         close = utcnow() + timedelta(seconds=5)
         client = FakeClient([listing("m1", close.isoformat(),
                                      mine={"id": "b1", "money": 10_000_000})])
         res = bidding.snipe("L", "m1", 11_000_000, client=client,
                             budget_seconds=10, log=lambda m: None)
-        self.assertEqual(res["status"], "already")
+        self.assertEqual(res["status"], "guarding")
         self.assertEqual(client.bids, [])
 
     def test_a_vanished_listing_is_not_an_error(self):

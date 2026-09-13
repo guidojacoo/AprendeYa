@@ -78,6 +78,7 @@ class FakeClient:
     def __init__(self, market=None):
         self._market = market or []
         self.bids = []
+        self.modified = []
         self.market_calls = 0
 
     def market(self, league_id):
@@ -91,6 +92,11 @@ class FakeClient:
         self.bids.append({"league_id": league_id, "market_id": market_id,
                           "amount": amount})
         return {"id": f"bid-{len(self.bids)}"}
+
+    def modify_bid(self, league_id, market_id, bid_id, money):
+        self.modified.append({"league_id": league_id, "market_id": market_id,
+                              "bid_id": bid_id, "money": money})
+        return {"id": bid_id, "money": money}
 
 
 def listing(market_id="m1", close_iso=None, value=10_000_000, bids=0, mine=None):

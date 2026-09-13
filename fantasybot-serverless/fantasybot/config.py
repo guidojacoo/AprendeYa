@@ -208,9 +208,26 @@ TICK_LOCK_SECONDS = _int("TICK_LOCK_SECONDS", 90)
 # neither, so it runs far less often.
 REVIEW_INTERVAL = _int("FANTASYBOT_REVIEW_INTERVAL", 3600)        # 1h
 LLM_INTERVAL = _int("FANTASYBOT_LLM_INTERVAL", 86400)             # 1 day
+# When the bid actually goes in, as seconds before the listing closes.
+#
+# This used to be fifteen seconds — sealed timing, nobody sees you coming. The
+# problem is that fifteen seconds is also all the room you get if the request is
+# refused, and LaLiga refuses bids for real reasons (the value moved, the money
+# is committed elsewhere). A bid that fails at T-15s is a player lost, because
+# the next tick arrives after the close.
+#
+# Five minutes gives the retry somewhere to happen: a failure at T-5min is
+# re-read, re-sized and re-sent at T-4min, with three attempts still inside the
+# window. The cost is that rivals see the bid count rise with time to answer it
+# — which is why `snipe` keeps guarding the bid after placing it instead of
+# standing down (see bidding.guard_bid).
+BID_FINAL_SECONDS = _int("FANTASYBOT_BID_FINAL_SECONDS", 300)
+
 # How early (seconds before close) a bid becomes a "sniper" job the scheduler
-# must hold the line for.
-BID_LEAD_SECONDS = _int("FANTASYBOT_BID_LEAD_SECONDS", 60)
+# must hold the line for. It has to be AHEAD of the window above, or the action
+# wakes up already late and the margin it was meant to create is gone.
+BID_LEAD_SECONDS = _int("FANTASYBOT_BID_LEAD_SECONDS",
+                        BID_FINAL_SECONDS + 30)
 
 # How often something actually wakes the bot. pg_cron runs it every minute, which
 # is the finest granularity it offers. The bidder needs this number: it is what

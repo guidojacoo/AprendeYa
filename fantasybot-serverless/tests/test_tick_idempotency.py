@@ -12,7 +12,7 @@ from datetime import timedelta
 
 from fantasybot import scheduler
 from fantasybot.scheduler import TickContext
-from fantasybot.storage import DONE, utcnow
+from fantasybot.storage import DONE, PENDING, utcnow
 from tests.support import FakeClient, StorageTestCase, listing
 
 
@@ -75,9 +75,10 @@ class TickRunsADueBidExactlyOnce(StorageTestCase):
         results = self._tick()
         self.assertEqual(len(self.client.bids), 1,
                          "the re-read must catch our own existing bid")
-        self.assertEqual(results[0]["status"], DONE)
-        self.assertEqual(results[0]["result"]["status"], "already",
-                         "it must stand down because OUR bid is already there")
+        self.assertEqual(results[0]["result"]["status"], "guarding",
+                         "it must not re-bid, because OUR bid is already there")
+        self.assertEqual(results[0]["status"], PENDING,
+                         "and it stays queued to watch that bid to the close")
 
 
 class ExpiredActionsAreSkipped(StorageTestCase):

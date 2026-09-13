@@ -121,7 +121,10 @@ def _execute_bid(ctx, action):
     if res.get("status") == "waiting":
         # Still early. Stay queued; the scheduler will wake us closer to the close.
         return {"retry": True, **res}
-    if res.get("status") == "bid" and not dry:
+    # `guarding` and `raised` carry their own `retry`, which stays true until the
+    # listing closes: a bid placed five minutes out has to be watched for those
+    # five minutes, or bidding early is all cost and no cover.
+    if res.get("status") in ("bid", "raised") and not dry:
         # Mirror it into the local bid ledger so `sync_bids` knows this player is
         # already covered and does not propose him all over again.
         bids = state.load_bids()
