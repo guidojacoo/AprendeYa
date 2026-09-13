@@ -132,7 +132,7 @@ class TheEndpointActsOnARosterSlot(StorageTestCase):
     did the first time it ran live."""
 
     def test_the_raise_is_sent_with_the_player_team_id(self):
-        from fantasybot import config, scheduler, tick
+        from fantasybot import config, tick
         from fantasybot.scheduler import TickContext
 
         sent = []
