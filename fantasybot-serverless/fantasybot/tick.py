@@ -31,6 +31,7 @@ from . import state
 from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
                         TickContext)
 from .matching import num
+from .strategy import upgrades as upgrades_mod
 from .storage import (DONE, FAILED, RUNNING, get_storage, parse_iso, to_iso,
                       utcnow)
 
@@ -375,7 +376,23 @@ def _plan_bids(ctx, client, lid, team, report):
                 **execute_mod.sync_bids(client, lid, team,
                                         dry_run=ctx.dry_run or not config.AUTO_EXECUTE)}
 
-    plan = execute_mod.plan_bids(client, lid, team)
+    # Ordered by what each signing ADDS to the eleven per euro, not by resale
+    # margin. Ranking the market by projected profit is a trader's question, and
+    # a trader finishes the season rich and second; the league is scored on
+    # points. `execute.plan_bids` remains the CLI's margin-ordered plan and the
+    # fallback for a review that produced no ranking.
+    ranked = [r for r in (report.get("upgrades") or [])
+              if upgrades_mod.worth_signing(r)]
+    if ranked:
+        budget = int(num(team.get("teamMoney")))
+        plan = [{"market_id": r["market_id"], "nombre": r.get("nombre"),
+                 "amount": int(num(r.get("buy_price"))),
+                 "margin_pct": r.get("margin_pct"), "gain": r.get("gain"),
+                 "gain_per_million": r.get("gain_per_million")}
+                for r in upgrades_mod.best_plan(ranked, budget,
+                                                reserve=config.CASH_RESERVE)]
+    else:
+        plan = execute_mod.plan_bids(client, lid, team)
     # Nobody in the league can outbid money they do not have. The richest rival's
     # estimated cash is the real ceiling on what any auction can cost us.
     rivals = report.get("rivals") or []
@@ -387,7 +404,12 @@ def _plan_bids(ctx, client, lid, team, report):
     scheduled, skipped = [], []
     # `plan_bids` already fits the targets inside the balance, cheapest commitment
     # first; we only add the timing.
-    by_id = {str(o["market_id"]): o for o in report.get("flips") or []}
+    # The close time and the current value come from whichever list the plan was
+    # built from. Reading them off `flips` alone left an upgrade that was not
+    # also a profitable flip with no close time — and therefore silently unbid.
+    by_id = {str(o["market_id"]): o
+             for o in (report.get("flips") or []) + (report.get("upgrades") or [])
+             if o.get("market_id") is not None}
     for b in plan:
         mid = str(b["market_id"])
         close_at = (by_id.get(mid) or {}).get("expires_at")

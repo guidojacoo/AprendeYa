@@ -63,6 +63,14 @@ def bid(flip, cap, rival_reach=None):
 
     head = f"Pujo por {name}{_upto(cap)}."
     why = []
+    # The reason it was chosen goes first, because it is what decided: how many
+    # points the eleven gains by owning him. The resale margin comes after — it
+    # funds the next signing, it does not win the gameweek.
+    gain = flip.get("gain")
+    if gain is not None:
+        per_m = flip.get("gain_per_million")
+        why.append(f"Mi once sube {gain:+.2f} puntos por jornada con él"
+                   + (f" ({per_m} por millón gastado)." if per_m else "."))
     if margin is not None:
         proj = _m(flip.get("proyeccion"))
         why.append(f"Vale {_m(flip.get('valor_actual'))} y proyecta {proj} "

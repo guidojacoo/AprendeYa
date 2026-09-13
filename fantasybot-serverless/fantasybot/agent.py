@@ -19,6 +19,7 @@ from .strategy import captain as captain_mod
 from .strategy import flip, needs as needs_mod, sell as sell_mod
 from .strategy import lineup as lineup_opt
 from .strategy import scoring
+from .strategy import upgrades
 from .strategy import shield as shield_mod
 from .sources.lineups import probable_lineups
 from .sources.market_trends import trends_index
@@ -339,6 +340,13 @@ def review(client, days_to_matchday=None):
     ops = flip.opportunities(client, lid, owned=owned)
     flips = [o for o in ops
              if o["margin_pct"] > 0 and o["buy_price"] <= team["teamMoney"]][:5]
+    # What each signing would ADD to the eleven, which is the only question that
+    # decides a league scored on points. Ranked here, where the squad, the market,
+    # the probabilities and this week's fixtures are all in scope at once.
+    upgrade_list = upgrades.rank(
+        ops, team, upgrades.players_by_id(market),
+        money=team["teamMoney"], prob_index=prob_index,
+        fixture_difficulty=fixture_difficulty, limit=20)
     market = scoring.rank(ops, prob_index=prob_index, money=team["teamMoney"],
                           limit=40,
                           # Judged against the man he would actually push out of
@@ -437,6 +445,7 @@ def review(client, days_to_matchday=None):
         "lineup": lineup_section,
         "flips": flips,
         "market": market,
+        "upgrades": upgrade_list,
         "gaps": gaps,
         # What it actually counted, next to what it concluded. "No tengo ningún
         # POR" while three sit in the squad is a claim with no evidence beside
