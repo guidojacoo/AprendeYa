@@ -127,3 +127,46 @@ class ItAllReachesExpectedPoints(StorageTestCase):
         """The signal improves the estimate when present and never gates it."""
         self.assertEqual(points.expected(self._pm(), 90),
                          points.expected(self._pm(), 90, history=None))
+
+
+class ThePerGameweekHistoryComesFromThePlayerRows(StorageTestCase):
+    """`/stats/week/{n}` is not player stats. The first live run recorded what
+    it returns: ten rows of {date, id, local, localScore, matchState, visitor,
+    visitorScore} — the week's FIXTURES. So the history is read from
+    `all_players()`, the competition-wide call the review already makes."""
+
+    def test_a_row_carrying_its_own_breakdown_is_read(self):
+        got = form.from_player_rows([
+            {"id": 7, "playerStats": [
+                {"weekNumber": 1, "totalPoints": 2, "mins_played": 90},
+                {"weekNumber": 2, "totalPoints": 9, "mins_played": 90},
+                {"weekNumber": 3, "totalPoints": 11, "mins_played": 88}]}])
+        self.assertEqual([h["points"] for h in got["7"]], [11.0, 9.0, 2.0],
+                         "most recent first")
+
+    def test_only_the_recent_weeks_are_kept(self):
+        got = form.from_player_rows([
+            {"id": 7, "playerStats": [{"points": i, "minutes": 90}
+                                      for i in range(10)]}])
+        self.assertEqual(len(got["7"]), form.WEEKS)
+
+    def test_a_bare_number_series_still_reads(self):
+        got = form.from_player_rows([{"id": 3, "points": [4, 6]}])
+        self.assertEqual([h["points"] for h in got["3"]], [6.0, 4.0])
+
+    def test_a_row_with_no_breakdown_contributes_nothing(self):
+        """The honest answer, rather than a zero that reads as poor form."""
+        self.assertEqual(
+            form.from_player_rows([{"id": 1, "marketValue": "800000"}]), {})
+
+    def test_it_records_the_row_shape_so_the_parser_can_be_aimed(self):
+        form.record_player_shape([{"id": 1, "marketValue": "80",
+                                   "playerStats": [{"weekNumber": 1,
+                                                    "totalPoints": 3}]}])
+        doc = get_storage().get_doc("all_players_shape", {})
+        self.assertIn("row_keys", doc["shape"])
+        self.assertIn("playerStats[0]_keys", doc["shape"])
+
+    def test_an_empty_payload_records_nothing_and_does_not_raise(self):
+        form.record_player_shape([])
+        self.assertEqual(get_storage().get_doc("all_players_shape", {}), {})

@@ -77,3 +77,51 @@ class TheKeyMatchesWhatTheAnalysisActuallyEmits(StorageTestCase):
         self.assertNotIn('"cash":', src,
                          "if the analysis ever emits `cash`, this test is the "
                          "place to find out which name won")
+
+
+class AnEstimateThatDoesNotAddUpIsNotACeiling(StorageTestCase):
+    """The estimate is `initial + sales - purchases + prizes`, so a PURCHASE the
+    history has not reached yet is money never subtracted — the error only runs
+    UPWARD. Unbounded it produced a rival holding 159 MILLION from a 15M start,
+    which marked a whole squad as reachable and would have had the defence
+    raising every clause in it to a number nobody could pay.
+
+    And the MAXIMUM of a noisy estimator picks whichever manager's history is
+    most incomplete, which is the opposite of what a ceiling is for."""
+
+    def test_a_suspect_estimate_does_not_top_the_list(self):
+        got, why = tick._rival_reach({"rivals": [
+            _rival(159_647_614, estimate_suspect=True),
+            _rival(6_200_000)]})
+        self.assertEqual(got, 6_200_000)
+        self.assertIsNone(why)
+
+    def test_all_suspect_means_no_ceiling_at_all(self):
+        got, why = tick._rival_reach({"rivals": [
+            _rival(159_647_614, estimate_suspect=True),
+            _rival(140_000_000, estimate_suspect=True)]})
+        self.assertEqual(got, 0)
+        self.assertIn("historial", why)
+
+    def test_the_estimate_is_bounded_by_what_could_exist(self):
+        """Starting money, plus everything they could have sold, plus winnings."""
+        from fantasybot.strategy.rivals import bound_balance
+        est, raw, cap, suspect = bound_balance(
+            initial_cash=15_000_000, net_profit=200_000_000,
+            squad_value=40_000_000, prizes=0)
+        self.assertTrue(suspect, "215M from a 15M start does not add up")
+        self.assertEqual(raw, 215_000_000, "the raw figure stays diagnosable")
+        self.assertEqual(cap, 55_000_000)
+        self.assertEqual(est, cap)
+
+    def test_an_ordinary_estimate_is_left_alone(self):
+        from fantasybot.strategy.rivals import bound_balance
+        est, _, _, suspect = bound_balance(15_000_000, -8_000_000, 40_000_000)
+        self.assertEqual(est, 7_000_000)
+        self.assertFalse(suspect)
+
+    def test_a_real_negative_survives_but_an_invented_one_does_not(self):
+        """LaLiga lets a balance go negative, but only to -10% of squad value."""
+        from fantasybot.strategy.rivals import bound_balance
+        est, _, _, _ = bound_balance(15_000_000, -20_000_000, 40_000_000)
+        self.assertEqual(est, -4_000_000)

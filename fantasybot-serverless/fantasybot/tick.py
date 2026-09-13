@@ -479,7 +479,15 @@ def _rival_reach(report):
     others = [r for r in rivals if not r.get("is_me")]
     if not others:
         return 0, "no veo rivales en la liga"
-    reach = max((int(num(r.get("estimated_balance"))) for r in others), default=0)
+    # The MAXIMUM of a noisy estimator picks whichever manager's history is most
+    # incomplete, which is the opposite of what a ceiling is for. Estimates the
+    # analysis could not make add up are dropped rather than topping the list.
+    credible = [r for r in others if not r.get("estimate_suspect")]
+    if not credible:
+        return 0, ("las estimaciones de caja no cierran; me falta historial "
+                   "de la liga")
+    reach = max((int(num(r.get("estimated_balance"))) for r in credible),
+                default=0)
     if reach <= 0:
         return 0, "no pude estimar la caja de ningún rival"
     return reach, None
@@ -1286,7 +1294,7 @@ def run_review(ctx, force=False):
                 # disappears from the response the moment it starts working.
                 "form": (report.get("form") if (report.get("form") or {}).get("ok")
                          else {**(report.get("form") or {}),
-                               "shape": store.get_doc("week_stats_shape", {})}),
+                               "shape": store.get_doc("all_players_shape", {})}),
                 "sources": sources, "skipped_for_time": skipped,
                 "elapsed": round(ctx.elapsed(), 1),
                 "reminders_queued": reminders,

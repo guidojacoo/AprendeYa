@@ -119,6 +119,15 @@ def _record_shape(week, payload):
         pass
 
 
+# `/stats/week/{n}` is NOT per-player stats. The first live run recorded what it
+# actually returns: ten rows of {date, id, local, localScore, matchState,
+# visitor, visitorScore} — the week's FIXTURES. Useful, and not this.
+#
+# So the per-player history comes from `all_players()`, the competition-wide read
+# the review already makes once a day to bank market values. Whether those rows
+# carry a per-week breakdown is the one thing left to confirm, and the same
+# recorder answers it: `player_shape` banks the keys of one row so the next live
+# run says what is there, instead of another round of guessing from here.
 def week(client, week_number):
     """One gameweek's stats, cached. {} when the shape is not recognised."""
     def _fetch():
@@ -129,6 +138,72 @@ def week(client, week_number):
         return parsed
     return cache.cached(f"week_stats_{week_number}", CACHE_TTL, _fetch,
                         default={}) or {}
+
+
+_STAT_LIST_KEYS = ("playerStats", "stats", "weeks", "weekStats", "points")
+
+
+def from_player_rows(players):
+    """{player_id: [most recent first]} from an `all_players()` payload.
+
+    A row that carries its own per-gameweek breakdown gives us form and minutes
+    for the whole competition in a read we already make. A row that does not
+    contributes nothing, which is the honest answer rather than a zero.
+    """
+    out = {}
+    for row in players or []:
+        pid = row.get("id")
+        if pid is None:
+            continue
+        series = None
+        for key in _STAT_LIST_KEYS:
+            got = row.get(key)
+            if isinstance(got, list) and got:
+                series = got
+                break
+        if not series:
+            continue
+        lines = []
+        for item in series:
+            if isinstance(item, dict):
+                pts = _num(_first(item, _POINT_KEYS))
+                mins = _num(_first(item, _MINUTE_KEYS))
+                stats = item.get("stats")
+                if isinstance(stats, dict):
+                    pts = pts if pts is not None else _num(_first(stats, _POINT_KEYS))
+                    mins = mins if mins is not None else _num(_first(stats, _MINUTE_KEYS))
+            else:
+                pts, mins = _num(item), None
+            if pts is None and mins is None:
+                continue
+            lines.append({"points": pts, "minutes": mins})
+        if lines:
+            out[str(pid)] = list(reversed(lines))[:WEEKS]
+    return out
+
+
+def record_player_shape(players):
+    """Bank the keys of one `all_players()` row, so the parser can be aimed.
+
+    Keys only, two levels deep. It runs once and only while the history is still
+    empty — a diagnostic that keeps firing after it has been answered is just
+    another thing writing to storage every hour.
+    """
+    try:
+        row = (players or [None])[0]
+        if not isinstance(row, dict):
+            return
+        shape = {"row_keys": sorted(row.keys())[:40]}
+        for key in _STAT_LIST_KEYS:
+            got = row.get(key)
+            if isinstance(got, list) and got and isinstance(got[0], dict):
+                shape[f"{key}[0]_keys"] = sorted(got[0].keys())[:30]
+            elif got is not None:
+                shape[key] = type(got).__name__
+        get_storage().put_doc("all_players_shape",
+                              {"at": to_iso(utcnow()), "shape": shape})
+    except Exception:                            # noqa: BLE001
+        pass
 
 
 def history(client, current_week, weeks=WEEKS):

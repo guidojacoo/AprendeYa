@@ -297,12 +297,6 @@ def review(client, days_to_matchday=None):
     # and which keeps standing when that scrape breaks. Never fatal: a failure
     # here leaves every estimate exactly where it was before.
     form_index = {}
-    try:
-        week_now = (client.current_week() or {}).get("weekNumber")
-        if week_now:
-            form_index = form.history(client, week_now)
-    except Exception:                            # noqa: BLE001
-        form_index = {}
 
     # date of the next matchday (for urgency and final lineup)
     kickoff = matchday.next_kickoff()
@@ -318,12 +312,25 @@ def review(client, days_to_matchday=None):
     # Bank today's OFFICIAL market values (all_players(), competition-wide — not just our
     # squad) so we build our OWN value history over time, independent of the futbolfantasy
     # scrape. Purely additive collection: a hiccup here must never break the review.
+    all_players = []
     try:
-        players = client.all_players()
+        all_players = client.all_players() or []
         state.save_value_snapshot(date.today().isoformat(),
-                                  value_history.snapshot_from_players(players))
+                                  value_history.snapshot_from_players(all_players))
     except Exception:
         pass
+
+    # Built from the competition-wide read above rather than from
+    # `/stats/week/{n}`, which the first live run showed is the FIXTURE LIST, not
+    # player stats. When the rows carry no per-gameweek breakdown this stays
+    # empty and every estimate behaves exactly as it did before — and records the
+    # row's keys once so the parser can be aimed instead of guessed at again.
+    try:
+        form_index = form.from_player_rows(all_players)
+        if not form_index and all_players:
+            form.record_player_shape(all_players)
+    except Exception:                            # noqa: BLE001
+        form_index = {}
 
     # 2) lineup — a squad that can't field a valid XI (e.g. no goalkeeper mid-rebuild)
     # must not crash the whole review: report it and carry on so gaps/needs still fire.

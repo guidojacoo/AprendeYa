@@ -108,6 +108,35 @@ def autocalibrate_initial_cash(
     return fallback
 
 
+def bound_balance(initial_cash, net_profit, squad_value, prizes=0):
+    """A manager's estimated cash, with both ends of the estimate pinned.
+
+    Returns (estimate, raw, plausible_max, suspect).
+
+    The estimate is `initial + sales - purchases + prizes`. Both of its errors
+    are one-directional and opposite:
+
+      - LaLiga lets a balance go negative, but only to -10% of the squad value,
+        so anything below that is the history inventing a debt.
+      - A PURCHASE the history has not been read yet is money never subtracted,
+        so an incomplete history only ever reads too RICH. Unbounded that gave a
+        rival 159 million from a 15 million start, which marked an entire squad
+        as reachable and would have had the clause defence raising every clause
+        in it to a number nobody in the league could pay.
+
+    The most anyone can plausibly hold is what they started with, plus
+    everything they could have sold, plus what they have won. Past that the
+    history is incomplete rather than the rival rich — so it is marked NOT
+    CREDIBLE rather than quietly clamped into looking reasonable, and the raw
+    figure stays visible so the gap can be diagnosed.
+    """
+    raw = initial_cash + net_profit
+    if squad_value:
+        raw = max(raw, -int(round(0.10 * squad_value)))
+    plausible_max = initial_cash + (squad_value or 0) + (prizes or 0)
+    return min(raw, plausible_max), raw, plausible_max, raw > plausible_max
+
+
 def analyze_squad_clauses(players: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Finds top protected player, maximum clause, and total squad clause value."""
     max_clause = 0
@@ -294,10 +323,9 @@ def analyze_rivals(
         # (any bid past that is blocked). So show real negatives (a heavy spender really can
         # sit at -28M), and only clamp to that floor so an incomplete history can't invent
         # an impossible super-negative. The old max(0, ...) hid every negative behind a 0.
-        est_balance = initial_cash + net_profit
         squad_value = t.get("teamValue") or 0
-        if squad_value:
-            est_balance = max(est_balance, -int(round(0.10 * squad_value)))
+        est_balance, raw_balance, plausible_max, estimate_suspect = bound_balance(
+            initial_cash, net_profit, squad_value, prizes)
         known_balance = t.get("teamMoney")
 
         rivals.append({
@@ -315,6 +343,9 @@ def analyze_rivals(
             "net_profit": net_profit,
             "initial_cash": initial_cash,
             "estimated_balance": est_balance,
+            "estimated_balance_raw": raw_balance,
+            "estimate_suspect": estimate_suspect,
+            "plausible_max": plausible_max,
             "known_balance": known_balance,
             "is_me": known_balance is not None,
             "top_protected": clause_info["top_protected"],
