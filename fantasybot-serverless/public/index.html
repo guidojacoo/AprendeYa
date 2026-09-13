@@ -469,8 +469,12 @@ function render(d){
     ?('<div class="row"><span class="tag warn">sin tiempo</span><div class="m">'
       +'La última revisión no llegó a: '
       +esc(sk.map(x=>PHASE[x]||x).join(', '))
-      +'<small>Pasa cuando la revisión se acerca al límite de 60s de Vercel. '
-      +'Se retoma en la siguiente.</small></div></div>')
+      +'<small>Pasa cuando la revisión se acerca al límite de 60s de Vercel'
+      +(rep.think_seconds?' — el análisis solo ya costó '+esc(rep.think_seconds)+'s':'')
+      +'. '+(rep.catchup_at
+             ?'Reintento programado para '+esc(when(rep.catchup_at,true))+'.'
+             :'Se retoma en la siguiente.')
+      +'</small></div></div>')
     :'<div class="empty">La última revisión hizo todo lo que tenía que hacer.</div>';
 
   /* ---- qué subiría más el once ---- */

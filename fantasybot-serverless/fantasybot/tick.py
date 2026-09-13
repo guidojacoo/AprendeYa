@@ -985,6 +985,12 @@ def run_review(ctx, force=False):
             report = agent_mod.review(client)
         finally:
             net.set_deadline(time.monotonic() + ctx.remaining())
+        # What the thinking cost, before any of the acting starts. When phases
+        # get dropped for time this is the number that explains it, and every
+        # time it mattered it was missing: "shortened for time" with no idea
+        # whether the review took eight seconds or thirty-eight is a symptom
+        # report, not a diagnosis.
+        think_seconds = round(ctx.elapsed(), 1)
         lid, tid = league_ids(client)
         team = client.team(lid, tid)
 
@@ -1055,7 +1061,8 @@ def run_review(ctx, force=False):
         store.put_doc("last_review_at", to_iso(now))
         store.put_doc("last_report",
                       _summarize(report, lineup_res, bids_res, listings,
-                                 clauses, shield, sources, gaps_res, skipped))
+                                 clauses, shield, sources, gaps_res, skipped,
+                                 think_seconds=think_seconds, catchup=catchup))
         events.emit("review", f"Revisión: caja {report['money']:,} €",
                     detail={"flips": len(report.get("flips") or []),
                             "tasks": len(report.get("tasks") or []),
@@ -1065,6 +1072,7 @@ def run_review(ctx, force=False):
             events.emit("note", f"Revisión acortada por tiempo: "
                                 f"{', '.join(skipped)}",
                         detail={"elapsed": round(ctx.elapsed(), 1),
+                                "el análisis": f"{think_seconds}s",
                                 "reintento": (catchup or {}).get("at")
                                 or "no hace falta"},
                         status="plan")
@@ -1074,6 +1082,7 @@ def run_review(ctx, force=False):
                 # drops its phases looks identical to one that had nothing to do.
                 "skipped": skipped,
                 "seconds": round(ctx.elapsed(), 1),
+                "think_seconds": think_seconds,
                 # The census travels with the answer, not only into the stored
                 # report: the caller asking "why did it buy a keeper" is holding
                 # this dict, and sending them to look somewhere else is how the
@@ -1115,7 +1124,8 @@ def _note_market_read(report):
 
 
 def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
-               shield=None, sources=None, gaps_res=None, skipped_phases=None):
+               shield=None, sources=None, gaps_res=None, skipped_phases=None,
+               think_seconds=None, catchup=None):
     """What the dashboard reads. Deliberately small: a full review payload is
     hundreds of KB of squad data and there is no reason to store it every hour."""
     lu = report.get("lineup") or {}
@@ -1147,6 +1157,11 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "shield": shield or {},
         "sources": sources or {},
         "skipped_phases": skipped_phases or [],
+        # Next to the list of what was dropped, the two numbers that say why and
+        # what happens about it: how long the analysis took before any of the
+        # acting started, and when the re-run is due.
+        "think_seconds": think_seconds,
+        "catchup_at": (catchup or {}).get("at"),
         # Is any of this actually making money? The rivals analysis already
         # computes our own purchases, sales and net P&L — surfacing it is the
         # difference between trusting the bot and hoping.
