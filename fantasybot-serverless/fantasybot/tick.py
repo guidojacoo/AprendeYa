@@ -51,6 +51,11 @@ _SPENDING_PHASES = ("gap_signings", "listings", "bids", "clauses",
 # close to costs real money for nothing.
 OBSERVED_SPEND_HEADROOM = 2.0
 
+# How far the two independent readings of rival spending power may disagree
+# before neither is trusted. They measure the same thing from the same feed, so
+# a wide gap is not caution versus boldness — it is a feed we are misreading.
+REACH_DISAGREEMENT = 5.0
+
 # Runtime knobs that live in the DB (settings table) and fall back to env config,
 # so cadence can be retuned from the dashboard without a redeploy.
 _SETTING_DEFAULTS = {
@@ -505,6 +510,18 @@ def _rival_reach(report):
     observed = max((int(num(r.get("max_purchase"))) for r in others), default=0)
     estimated = max((int(num(r.get("estimated_balance"))) for r in others
                      if not r.get("estimate_suspect")), default=0)
+    # Two independent readings of the same feed that disagree by thirty times
+    # are not one cautious answer and one bold one — they are two answers from
+    # data we do not understand yet, and a squad is not worth defending with
+    # money against either of them. The live feed gives exactly that: a manager
+    # estimated at 159M who has never been recorded buying anything, next to two
+    # different managers whose largest purchase is the same 141,030,000 to the
+    # euro. `record_activity_shape` is banking what those rows actually are.
+    if observed > 0 and estimated > 0:
+        spread = max(observed, estimated) / max(1, min(observed, estimated))
+        if spread > REACH_DISAGREEMENT:
+            return 0, ("lo que gastaron y lo que estimo que tienen no se "
+                       "parecen; no gasto contra un número que no entiendo")
     if observed <= 0:
         # Nobody has bought anything yet, so there is no demonstrated spending
         # to reason from. Early in a season this is ordinary, not broken.
@@ -859,7 +876,11 @@ def _plan_clause_defense(ctx, lid, team, report):
             continue
         queued.append(r)
     return {**got, "raises": queued, "rival_reach": reach,
-            "cost_ratio": _clause_cost_ratio()}
+            "cost_ratio": _clause_cost_ratio(),
+            # What an activity row actually looks like, while the two readings
+            # of it still disagree. Disappears once one is recorded.
+            "activity_shape": (get_storage().get_doc("activity_shape", None)
+                               if blocked or not reach else None)}
 
 
 def _plan_shield(ctx, lid, report):

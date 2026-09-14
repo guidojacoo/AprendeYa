@@ -9,6 +9,7 @@ Combines:
 from typing import Any, Dict, List, Optional
 from ..matching import position_of
 from .. import state
+from ..storage import get_storage, to_iso, utcnow
 
 # Activity type IDs from LaLiga Fantasy API:
 # 31 = market purchase (user1Id buys player from market)
@@ -19,6 +20,41 @@ TYPE_MARKET_BUY = 31
 TYPE_MARKET_SELL = 33
 TYPE_DIRECT_TRANSFER = 1
 TYPE_MATCHDAY_REWARD = 6
+
+
+def record_activity_shape(activity_feed: List[Dict[str, Any]]) -> None:
+    """Bank the keys of one activity row, so `amount` can stop being a guess.
+
+    Two signals have now been built on this feed and both produced numbers that
+    cannot be true: a manager estimated at 159M holding the league's smallest
+    squad, and two different managers whose largest single purchase is exactly
+    141,030,000 — the same figure twice, which is not what independent purchases
+    look like. Either `amount` is not a price on these rows, or the row type is
+    not what the id suggests.
+
+    Recording the shape resolved the last two unknowns in one run each. Keys and
+    types only, no values, and only while nothing has been recorded yet.
+    """
+    try:
+        store = get_storage()
+        if store.get_doc("activity_shape", None):
+            return
+        sample = {}
+        for row in (activity_feed or [])[:40]:
+            if not isinstance(row, dict):
+                continue
+            t = row.get("activityTypeId")
+            if t in sample:
+                continue
+            sample[t] = {k: type(v).__name__ for k, v in sorted(row.items())}
+            if len(sample) >= 6:
+                break
+        if sample:
+            store.put_doc("activity_shape",
+                          {"at": to_iso(utcnow()),
+                           "by_type": {str(k): v for k, v in sample.items()}})
+    except Exception:                            # noqa: BLE001
+        pass
 
 
 def parse_activity(activity_feed: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
@@ -284,6 +320,7 @@ def analyze_rivals(
 
     # Accumulate into persistent history (.state/activity_history.json)
     activity_cumulative = state.record_activity(activity_live, league_id)
+    record_activity_shape(activity_cumulative)
     flow_by_user = parse_activity(activity_cumulative)
 
     # Every manager in a league starts with the SAME budget, so instead of guessing a

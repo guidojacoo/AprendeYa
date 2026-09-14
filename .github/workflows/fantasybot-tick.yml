@@ -189,6 +189,7 @@ jobs:
                                   form: (.review.form // null),
                                   defensa_por_que: .review.defense.why?,
                                   cajas: .review.defense.reach_detail?,
+                                  actividad: .review.defense.activity_shape?,
                                   minutos: .review.form.minutes?,
                                   pujas: {programadas: (.review.bids.scheduled | length?),
                                           embudo: .review.bids.funnel?,

@@ -146,7 +146,7 @@ class WhatTheLeagueHasActuallyPaid(StorageTestCase):
 
     def test_demonstrated_spending_sets_the_floor(self):
         got, _ = tick._rival_reach({"rivals": [
-            _rival(1_000_000, spent=9_000_000)]})
+            _rival(3_000_000, spent=9_000_000)]})
         self.assertGreaterEqual(got, 9_000_000,
                                 "somebody paid this; it is not a guess")
 
@@ -155,12 +155,36 @@ class WhatTheLeagueHasActuallyPaid(StorageTestCase):
             _rival(14_000_000, spent=9_000_000)]})
         self.assertEqual(got, 14_000_000)
 
-    def test_but_not_to_a_number_nobody_has_come_near(self):
-        """Defending against 159M in a league whose biggest deal is 9M costs
-        real money for nothing."""
+    def test_it_never_goes_far_past_what_anyone_has_spent(self):
         got, _ = tick._rival_reach({"rivals": [
-            _rival(159_647_614, spent=9_000_000)]})
+            _rival(40_000_000, spent=9_000_000)]})
         self.assertEqual(got, 18_000_000)
+
+
+class TwoReadingsThatDisagreeAreNotAnAnswer(StorageTestCase):
+    """They measure the same thing from the same feed, so a wide gap is not
+    caution versus boldness -- it is a feed being misread. The live one gives
+    exactly that: a manager estimated at 159M who has never been recorded buying
+    anything, next to two different managers whose largest purchase is the same
+    141,030,000 to the euro."""
+
+    def test_a_wild_disagreement_spends_nothing(self):
+        got, why = tick._rival_reach({"rivals": [
+            _rival(159_647_614, spent=9_000_000)]})
+        self.assertEqual(got, 0)
+        self.assertIn("no entiendo", why)
+
+    def test_readings_that_roughly_agree_are_believed(self):
+        got, why = tick._rival_reach({"rivals": [
+            _rival(11_000_000, spent=9_000_000)]})
+        self.assertEqual(got, 11_000_000)
+        self.assertIsNone(why)
+
+    def test_one_reading_alone_is_still_usable(self):
+        """Nothing to disagree with is not the same as disagreeing."""
+        got, why = tick._rival_reach({"rivals": [_rival(6_000_000, spent=0)]})
+        self.assertEqual(got, 6_000_000)
+        self.assertIsNone(why)
 
     def test_a_league_that_has_not_spent_yet_is_not_broken(self):
         got, why = tick._rival_reach({"rivals": [_rival(6_000_000, spent=0)]})
