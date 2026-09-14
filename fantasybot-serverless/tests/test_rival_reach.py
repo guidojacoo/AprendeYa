@@ -163,10 +163,14 @@ class WhatTheLeagueHasActuallyPaid(StorageTestCase):
 
 class TwoReadingsThatDisagreeAreNotAnAnswer(StorageTestCase):
     """They measure the same thing from the same feed, so a wide gap is not
-    caution versus boldness -- it is a feed being misread. The live one gives
-    exactly that: a manager estimated at 159M who has never been recorded buying
-    anything, next to two different managers whose largest purchase is the same
-    141,030,000 to the euro."""
+    caution versus boldness -- it is a feed being misread. The live league gives
+    exactly that in mercho40: estimated at 159M, holding a 93M squad, and never
+    once recorded buying anything.
+
+    The other case that looked wrong was not. Two managers sharing a largest
+    purchase of exactly 141,030,000 are the same player moving twice, bought
+    then claused, both buyers rightly credited -- in a league that really does
+    trade at a hundred million and up."""
 
     def test_a_wild_disagreement_spends_nothing(self):
         got, why = tick._rival_reach({"rivals": [

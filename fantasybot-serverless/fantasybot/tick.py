@@ -509,10 +509,16 @@ def _rival_reach(report):
     # on nothing.
     # PER MANAGER, not across the league. Comparing the biggest observed spend
     # to the biggest estimate takes them from different people — they can agree
-    # by coincidence while every individual pair disagrees wildly, which is
-    # exactly what the live league does: the two maxima are within 13% of each
-    # other while one manager reads 0 against 159M and another 141M against 44M.
-    # The aggregate check passed and told me nothing.
+    # by coincidence while every individual pair disagrees wildly, which is what
+    # the live league does. The aggregate check passed and told me nothing.
+    #
+    # The two managers who shared a largest purchase of exactly 141,030,000 were
+    # NOT a bug: the activity rows show the same player (3104) moving twice —
+    # bought from the market on 10 August, then taken on his clause from that
+    # owner on 8 September, for the same figure. Both buyers are credited, which
+    # is correct. The number is real and so is the scale: this league trades at
+    # a hundred million and up. Calling it impossible was an assumption about
+    # the game asserted as a reading of the data, and it was wrong.
     reachable = []
     unreadable = 0
     for r in others:

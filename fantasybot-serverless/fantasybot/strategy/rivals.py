@@ -25,15 +25,16 @@ TYPE_MATCHDAY_REWARD = 6
 def record_activity_shape(activity_feed: List[Dict[str, Any]]) -> None:
     """Bank the keys of one activity row, so `amount` can stop being a guess.
 
-    Two signals have now been built on this feed and both produced numbers that
-    cannot be true: a manager estimated at 159M holding the league's smallest
-    squad, and two different managers whose largest single purchase is exactly
-    141,030,000 — the same figure twice, which is not what independent purchases
-    look like. Either `amount` is not a price on these rows, or the row type is
-    not what the id suggests.
+    It answered the question it was added for. The two managers sharing a
+    largest purchase of exactly 141,030,000 are the same player (3104) moving
+    twice — a market buy on 10 August, then a clause paid to that owner on 8
+    September — and both buyers are rightly credited. `amount` IS the price.
+    What was wrong was the sense of scale it was judged against: this league
+    trades at a hundred million and up, so the figure that looked impossible
+    was ordinary.
 
-    Recording the shape resolved the last two unknowns in one run each. Keys and
-    types only, no values, and only while nothing has been recorded yet.
+    Kept because the next unknown payload will want it, and because the record
+    of what these rows are belongs in the code rather than in a log.
     """
     try:
         store = get_storage()
