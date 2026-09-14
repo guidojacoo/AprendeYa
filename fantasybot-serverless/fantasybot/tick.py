@@ -507,29 +507,48 @@ def _rival_reach(report):
     # has demonstrated. A number nobody has come close to spending is not a
     # threat to defend a squad against — it is a reason to spend our own money
     # on nothing.
-    observed = max((int(num(r.get("max_purchase"))) for r in others), default=0)
-    estimated = max((int(num(r.get("estimated_balance"))) for r in others
-                     if not r.get("estimate_suspect")), default=0)
-    # Two independent readings of the same feed that disagree by thirty times
-    # are not one cautious answer and one bold one — they are two answers from
-    # data we do not understand yet, and a squad is not worth defending with
-    # money against either of them. The live feed gives exactly that: a manager
-    # estimated at 159M who has never been recorded buying anything, next to two
-    # different managers whose largest purchase is the same 141,030,000 to the
-    # euro. `record_activity_shape` is banking what those rows actually are.
-    if observed > 0 and estimated > 0:
-        spread = max(observed, estimated) / max(1, min(observed, estimated))
-        if spread > REACH_DISAGREEMENT:
+    # PER MANAGER, not across the league. Comparing the biggest observed spend
+    # to the biggest estimate takes them from different people — they can agree
+    # by coincidence while every individual pair disagrees wildly, which is
+    # exactly what the live league does: the two maxima are within 13% of each
+    # other while one manager reads 0 against 159M and another 141M against 44M.
+    # The aggregate check passed and told me nothing.
+    reachable = []
+    unreadable = 0
+    for r in others:
+        if r.get("estimate_suspect"):
+            continue
+        spent = int(num(r.get("max_purchase")))
+        holds = int(num(r.get("estimated_balance")))
+        if spent > 0 and holds > 0:
+            spread = max(spent, holds) / min(spent, holds)
+            if spread > REACH_DISAGREEMENT:
+                # His two readings describe different people. Skip him rather
+                # than pick the scarier one: defending against a number we
+                # cannot corroborate spends real money on a guess.
+                unreadable += 1
+                continue
+            reachable.append(min(max(spent, holds),
+                                 round(spent * OBSERVED_SPEND_HEADROOM)))
+        elif spent > 0:
+            reachable.append(round(spent * OBSERVED_SPEND_HEADROOM))
+        elif holds > 0:
+            # Never recorded buying anything. Whether that is believable depends
+            # entirely on whether he HAS a squad: nobody assembles ninety-three
+            # million of footballers for free, so a squad with no purchases
+            # behind it is a history we are missing rather than a manager who
+            # never bought. With no squad either, it is week one and the
+            # estimate — everyone's identical starting budget — is simply true.
+            if int(num(r.get("team_value"))) > 0:
+                unreadable += 1
+            else:
+                reachable.append(holds)
+    if not reachable:
+        if unreadable:
             return 0, ("lo que gastaron y lo que estimo que tienen no se "
                        "parecen; no gasto contra un número que no entiendo")
-    if observed <= 0:
-        # Nobody has bought anything yet, so there is no demonstrated spending
-        # to reason from. Early in a season this is ordinary, not broken.
-        if estimated <= 0:
-            return 0, "todavía no vi a ningún rival gastar"
-        return estimated, None
-    reach = min(max(observed, estimated), round(observed * OBSERVED_SPEND_HEADROOM))
-    return reach, None
+        return 0, "todavía no vi a ningún rival gastar"
+    return max(reachable), None
 
 
 def _plan_bids(ctx, client, lid, team, report):
@@ -879,8 +898,10 @@ def _plan_clause_defense(ctx, lid, team, report):
             "cost_ratio": _clause_cost_ratio(),
             # What an activity row actually looks like, while the two readings
             # of it still disagree. Disappears once one is recorded.
-            "activity_shape": (get_storage().get_doc("activity_shape", None)
-                               if blocked or not reach else None)}
+            # Recorded once and carried until the readings stop
+            # contradicting each other. Gating it on `blocked` hid it exactly
+            # when the aggregate check wrongly passed and I needed it most.
+            "activity_shape": get_storage().get_doc("activity_shape", None)}
 
 
 def _plan_shield(ctx, lid, report):

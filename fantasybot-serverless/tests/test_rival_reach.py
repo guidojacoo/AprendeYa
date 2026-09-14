@@ -17,13 +17,14 @@ from fantasybot import tick
 from tests.support import StorageTestCase
 
 
-def _rival(balance, spent=None, **kw):
+def _rival(balance, spent=None, squad=0, **kw):
     """A rival row. `spent` is the biggest transfer they have actually made —
     the observed fact the reach now leads with; it defaults to something
     comfortably above the estimate so tests about the ESTIMATE are not
     accidentally testing the headroom clamp."""
     row = {"estimated_balance": balance, "is_me": False,
            "partial_history": False, "manager_name": "Rival",
+           "team_value": squad,
            "max_purchase": balance if spent is None else spent}
     row.update(kw)
     return row
@@ -101,12 +102,11 @@ class AnEstimateThatDoesNotAddUpIsNotACeiling(StorageTestCase):
         self.assertEqual(got, 6_200_000)
         self.assertIsNone(why)
 
-    def test_a_suspect_estimate_cannot_raise_the_bar(self):
-        """Only what the league has demonstrated is left standing."""
+    def test_a_suspect_estimate_takes_its_manager_out_of_the_reckoning(self):
         got, why = tick._rival_reach({"rivals": [
             _rival(159_647_614, spent=6_000_000, estimate_suspect=True),
-            _rival(140_000_000, spent=4_000_000, estimate_suspect=True)]})
-        self.assertEqual(got, 6_000_000)
+            _rival(7_000_000, spent=5_000_000)]})
+        self.assertEqual(got, 7_000_000)
         self.assertIsNone(why)
 
     def test_the_estimate_is_bounded_by_what_could_exist(self):
@@ -180,13 +180,27 @@ class TwoReadingsThatDisagreeAreNotAnAnswer(StorageTestCase):
         self.assertEqual(got, 11_000_000)
         self.assertIsNone(why)
 
-    def test_one_reading_alone_is_still_usable(self):
-        """Nothing to disagree with is not the same as disagreeing."""
-        got, why = tick._rival_reach({"rivals": [_rival(6_000_000, spent=0)]})
+    def test_a_manager_we_cannot_read_does_not_veto_one_we_can(self):
+        """The aggregate check compared maxima from different people; this is
+        the case it got wrong."""
+        got, why = tick._rival_reach({"rivals": [
+            _rival(159_647_614, spent=0, squad=92_861_661),
+            _rival(63_707_634, spent=55_490_510, squad=226_654_714)]})
+        self.assertEqual(got, 63_707_634)
+        self.assertIsNone(why)
+
+    def test_week_one_believes_the_starting_budget(self):
+        """No squad and no purchases is not a gap in the history — it is a
+        league that has not started trading."""
+        got, why = tick._rival_reach({"rivals": [
+            _rival(6_000_000, spent=0, squad=0)]})
         self.assertEqual(got, 6_000_000)
         self.assertIsNone(why)
 
-    def test_a_league_that_has_not_spent_yet_is_not_broken(self):
-        got, why = tick._rival_reach({"rivals": [_rival(6_000_000, spent=0)]})
-        self.assertEqual(got, 6_000_000)
-        self.assertIsNone(why)
+    def test_a_squad_with_no_purchases_behind_it_is_a_missing_history(self):
+        """Nobody assembles ninety-three million of footballers for free. This
+        is mercho40, estimated at 159M with nothing ever recorded."""
+        got, why = tick._rival_reach({"rivals": [
+            _rival(159_647_614, spent=0, squad=92_861_661)]})
+        self.assertEqual(got, 0)
+        self.assertIn("no entiendo", why)
