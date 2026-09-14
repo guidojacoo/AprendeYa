@@ -190,6 +190,9 @@ jobs:
                                   defensa_por_que: .review.defense.why?,
                                   cajas: .review.defense.reach_detail?,
                                   minutos: .review.form.minutes?,
+                                  pujas: {programadas: (.review.bids.scheduled | length?),
+                                          embudo: .review.bids.funnel?,
+                                          descartadas: .review.bids.skipped?},
                                   skipped_phases: (.review.skipped // null),
                                   clock, error}' 2>/dev/null || echo "$BODY"
 

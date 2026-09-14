@@ -226,6 +226,7 @@
       <section><h2>Ofertas recibidas</h2><div id="offers"></div></section>
       <section><h2>Estado de la plantilla</h2><div id="squadstate"></div></section>
       <section><h2>Qué no llegó a hacer</h2><div id="shortfall"></div></section>
+      <section><h2>Por qué no pujó</h2><div id="bidfunnel"></div></section>
       <section><h2>Oportunidades de compra</h2><div class="scroll" id="flips"></div></section>
       <section><h2>Cláusulas programadas</h2><div id="clauses"></div></section>
       <section><h2>Blindaje</h2><div id="shield"></div></section>
@@ -397,6 +398,25 @@ function render(d){
       +esc(cand.nombre)+'</b><small>'+esc(cand.reason||'')+'</small></div>'
       +'<div class="right">'+esc(short(cand.clause))+'</div></div>')
     :'<div class="empty">Ningún jugador tuyo está en riesgo ahora.</div>';
+
+  /* ---- por qué no pujó ---- */
+  const bf=(rep.bids||{}).funnel||null, nsched=((rep.bids||{}).scheduled||[]).length;
+  $('bidfunnel').innerHTML=!bf
+    ?'<div class="empty">Sin datos de la última revisión.</div>'
+    :(nsched
+        ?'<div class="row"><span class="tag ok">'+nsched+'</span><div class="m">'
+         +'pujas programadas para el cierre</div></div>'
+        :'<div class="row"><span class="tag warn">0</span><div class="m">'
+         +'No programó ninguna puja'+((rep.bids||{}).budget
+            ?' con '+short(rep.bids.budget)+' en caja':'')+'</div></div>')
+      +Object.entries(bf).map(([k,v])=>
+        '<div class="row"><div class="m">'+esc(k)+'</div>'
+        +'<div class="right"><span class="num">'
+        +esc(typeof v==='number'&&v<100?v:short(v))+'</span></div></div>').join('')
+      +((rep.bids||{}).skipped||[]).map(x=>
+        '<div class="row"><span class="tag idle">saltada</span><div class="m">'
+        +esc(x.nombre||x.market_id||'')+'<small>'+esc(x.reason||'')
+        +'</small></div></div>').join('');
 
   /* ---- quién te pueden robar (cláusulas) ---- */
   const df=rep.defense||{}, exp=df.exposed||[], raised=df.raises||[];

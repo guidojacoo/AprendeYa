@@ -545,18 +545,34 @@ def _plan_bids(ctx, client, lid, team, report):
     # a trader finishes the season rich and second; the league is scored on
     # points. `execute.plan_bids` remains the CLI's margin-ordered plan and the
     # fallback for a review that produced no ranking.
-    ranked = [r for r in (report.get("upgrades") or [])
-              if upgrades_mod.worth_signing(r)]
+    candidates = report.get("upgrades") or []
+    ranked = [r for r in candidates if upgrades_mod.worth_signing(r)]
+    budget = int(num(team.get("teamMoney")))
+    # Where the candidates went. "scheduled_bids: 0" with forty-four million in
+    # the bank is a claim with nothing beside it: it reads the same whether the
+    # market was empty, everyone was too expensive, or nobody was worth the
+    # points. Each of those is a different problem and two of them are bugs.
+    funnel = {
+        "en el mercado": len(candidates),
+        "no me alcanza": sum(1 for r in candidates if not r.get("affordable")),
+        "suman muy poco": sum(1 for r in candidates
+                              if r.get("affordable")
+                              and (r.get("gain") or 0) < upgrades_mod.MIN_GAIN),
+        "valen la pena": len(ranked),
+        "mejor gana": max((r.get("gain") or 0 for r in candidates), default=0),
+        "hace falta ganar": upgrades_mod.MIN_GAIN,
+    }
     if ranked:
-        budget = int(num(team.get("teamMoney")))
         plan = [{"market_id": r["market_id"], "nombre": r.get("nombre"),
                  "amount": int(num(r.get("buy_price"))),
                  "margin_pct": r.get("margin_pct"), "gain": r.get("gain"),
                  "gain_per_million": r.get("gain_per_million")}
                 for r in upgrades_mod.best_plan(ranked, budget,
                                                 reserve=config.CASH_RESERVE)]
+        funnel["entran en la caja"] = len(plan)
     else:
         plan = execute_mod.plan_bids(client, lid, team)
+        funnel["por margen (plan B)"] = len(plan)
     # Nobody in the league can outbid money they do not have. The richest rival's
     # estimated cash is the real ceiling on what any auction can cost us.
     # A cash estimate built from a partially backfilled history is not a ceiling,
@@ -610,7 +626,8 @@ def _plan_bids(ctx, client, lid, team, report):
                     detail={"why": why, "closes": to_iso(close_at),
                             "precio": f"{price:,}", "techo": f"{ceiling:,}"},
                     status="plan")
-    return {"mode": "snipe", "scheduled": scheduled, "skipped": skipped}
+    return {"mode": "snipe", "scheduled": scheduled, "skipped": skipped,
+            "funnel": funnel, "budget": budget}
 
 
 # Don't spend on a signing who will not play. Same floor the clause hunter uses.
