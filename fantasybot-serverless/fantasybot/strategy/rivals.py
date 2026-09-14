@@ -37,10 +37,11 @@ def record_activity_shape(activity_feed: List[Dict[str, Any]]) -> None:
     """
     try:
         store = get_storage()
-        if store.get_doc("activity_shape", None):
-            return
+        got = store.get_doc("activity_shape", None)
+        if got and got.get("biggest") is not None:
+            return          # already answered; don't rewrite it every hour
         sample = {}
-        for row in (activity_feed or [])[:40]:
+        for row in (activity_feed or [])[:200]:
             if not isinstance(row, dict):
                 continue
             t = row.get("activityTypeId")
@@ -49,10 +50,21 @@ def record_activity_shape(activity_feed: List[Dict[str, Any]]) -> None:
             sample[t] = {k: type(v).__name__ for k, v in sorted(row.items())}
             if len(sample) >= 6:
                 break
-        if sample:
+        # And the rows that produced the impossible numbers. A type sample said
+        # what the FIELDS are; it cannot say why two different managers have the
+        # same 141,030,000 as their largest purchase. These are league activity
+        # — amounts and player ids, nothing private — and they are the only
+        # thing that answers it.
+        priced = [r for r in (activity_feed or [])
+                  if isinstance(r, dict) and isinstance(r.get("amount"), int)]
+        biggest = sorted(priced, key=lambda r: -(r.get("amount") or 0))[:4]
+        if sample or biggest:
             store.put_doc("activity_shape",
                           {"at": to_iso(utcnow()),
-                           "by_type": {str(k): v for k, v in sample.items()}})
+                           "by_type": {str(k): v for k, v in sample.items()},
+                           "rows": len(activity_feed or []),
+                           "priced": len(priced),
+                           "biggest": biggest})
     except Exception:                            # noqa: BLE001
         pass
 
