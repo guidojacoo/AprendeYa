@@ -28,10 +28,19 @@ from datetime import timedelta
 
 from .. import config
 from .base import (CANCELLED, PENDING, RUNNING, Storage, StorageError,
-                   parse_iso, to_iso, utcnow)
+                   StorageUnavailable, parse_iso, to_iso, utcnow)
 
-TIMEOUT = 15
+# A single request's patience. Three attempts at fifteen seconds is
+# forty-five — more than the whole tick budget — so a slow database used to
+# take the function down with it rather than being given up on.
+TIMEOUT = 8
 RETRIES = 2
+# Total wall clock any one call may spend, retries and backoff included. The
+# tick has about fifty seconds to live and this is one read inside it.
+RETRY_BUDGET = 20
+# A gateway timeout means the far side is busy. Coming back half a second later
+# asks the same busy thing the same question; these are seconds, and they grow.
+BACKOFF = (1.5, 4.0)
 
 
 def _project_url(url):
@@ -107,6 +116,11 @@ class SupabaseStorage(Storage):
             headers["Prefer"] = prefer
 
         last = None
+        started = time.monotonic()
+
+        def _spent():
+            return time.monotonic() - started
+
         for attempt in range(RETRIES + 1):
             req = urllib.request.Request(url, data=data, headers=headers,
                                          method=method)
@@ -121,20 +135,25 @@ class SupabaseStorage(Storage):
                     # a normal outcome here, not a failure.
                     raise ConflictError(detail) from None
                 # 5xx is worth another go; a 4xx is our own bad request.
-                if e.code >= 500 and attempt < RETRIES:
-                    last = StorageError(f"{method} {path} -> {e.code}: {detail}")
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
+                if e.code >= 500:
+                    last = StorageUnavailable(
+                        f"{method} {path} -> {e.code}: {detail}")
+                    wait = BACKOFF[min(attempt, len(BACKOFF) - 1)]
+                    if attempt < RETRIES and _spent() + wait < RETRY_BUDGET:
+                        time.sleep(wait)
+                        continue
+                    raise last from e
                 raise StorageError(f"{method} {path} -> {e.code}: {detail}") from e
             except (urllib.error.URLError, TimeoutError, OSError) as e:
                 # Every write below is either idempotent or unique-key guarded,
                 # so a retry cannot duplicate anything.
-                last = StorageError(f"{method} {path}: {e}")
-                if attempt < RETRIES:
-                    time.sleep(0.5 * (attempt + 1))
+                last = StorageUnavailable(f"{method} {path}: {e}")
+                wait = BACKOFF[min(attempt, len(BACKOFF) - 1)]
+                if attempt < RETRIES and _spent() + wait < RETRY_BUDGET:
+                    time.sleep(wait)
                     continue
                 raise last from e
-        raise last or StorageError(f"{method} {path} failed")
+        raise last or StorageUnavailable(f"{method} {path} failed")
 
     def _select(self, table, params, limit=None, order=None):
         p = {"select": "*"}

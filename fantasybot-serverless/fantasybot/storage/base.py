@@ -68,6 +68,20 @@ class StorageError(Exception):
     pass
 
 
+class StorageUnavailable(StorageError):
+    """The database was reachable but did not answer in time.
+
+    A 504 from PostgREST, a connection reset, a cold pool. Distinct from
+    StorageError because it says something completely different about the
+    system: a StorageError is a query we got wrong and will get wrong again,
+    and this is a minute in which Supabase was busy.
+
+    On a free tier woken sixty times an hour, that minute happens. Treating it
+    as a broken deployment means a red event, a fail streak and a phone buzzing
+    over a tick that simply needed to be the next tick instead.
+    """
+
+
 class Storage:
     """Interface. Subclasses implement it; nothing here reaches the network."""
 

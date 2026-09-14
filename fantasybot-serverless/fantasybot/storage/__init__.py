@@ -12,7 +12,7 @@ it always did, and the same code on Vercel picks up the database with no flag.
 
 from .. import config
 from .base import (CANCELLED, DONE, FAILED, PENDING, RUNNING, SKIPPED,
-                   Storage, StorageError, parse_iso, to_iso, utcnow)
+                   Storage, StorageError, StorageUnavailable, parse_iso, to_iso, utcnow)
 
 _backend = None
 
@@ -50,5 +50,5 @@ def reset_storage():
 
 
 __all__ = ["get_storage", "set_storage", "reset_storage", "Storage",
-           "StorageError", "utcnow", "to_iso", "parse_iso",
+           "StorageError", "StorageUnavailable", "utcnow", "to_iso", "parse_iso",
            "PENDING", "RUNNING", "DONE", "FAILED", "CANCELLED", "SKIPPED"]

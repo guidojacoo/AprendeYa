@@ -33,7 +33,8 @@ from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
 from .matching import num
 from .strategy import clausedefense as clausedef
 from .strategy import upgrades as upgrades_mod
-from .storage import (DONE, FAILED, RUNNING, get_storage, parse_iso, to_iso,
+from .storage import (DONE, FAILED, RUNNING, SKIPPED, StorageUnavailable,
+                      get_storage, parse_iso, to_iso,
                       utcnow)
 
 REVIEW_LOCK = "review"
@@ -1532,6 +1533,25 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         _note_health(store, ok=not failed, error=summary.get("error"))
         _check_token_expiry(store)
         _heal_scheduler_url(store)
+        return summary
+    except StorageUnavailable as e:
+        # The database was busy, not wrong. On a free tier woken sixty times an
+        # hour this is a minute that happens, and the next tick is a minute
+        # away — so it is a note, not a red event, and it does not touch the
+        # fail streak that puts a "your bot is broken" message on a phone.
+        # Calling a slow minute a broken deployment is how a real one stops
+        # being believed.
+        net.clear_deadline()
+        summary.update({"ok": True, "degraded": "storage",
+                        "note": f"{type(e).__name__}: {e}",
+                        "duration_seconds": round(time.monotonic() - started, 2)})
+        try:
+            store.finish_execution(execution_id, SKIPPED, summary=summary)
+            events.emit("note", "La base tardó de más; lo reintento en el "
+                                "próximo minuto",
+                        detail={"detalle": str(e)[:200]}, status="plan")
+        except Exception:
+            pass
         return summary
     except Exception as e:                       # noqa: BLE001
         net.clear_deadline()
