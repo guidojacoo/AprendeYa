@@ -1594,7 +1594,7 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         summary["clock"] = _clock_report(store, source)
         summary["duration_seconds"] = round(time.monotonic() - started, 2)
         store.finish_execution(execution_id, DONE if not failed else FAILED,
-                               summary=summary)
+                               summary=_slim(summary))
         _note_health(store, ok=not failed, error=summary.get("error"))
         _check_token_expiry(store)
         _heal_scheduler_url(store)
@@ -1611,7 +1611,7 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
                         "note": f"{type(e).__name__}: {e}",
                         "duration_seconds": round(time.monotonic() - started, 2)})
         try:
-            store.finish_execution(execution_id, SKIPPED, summary=summary)
+            store.finish_execution(execution_id, SKIPPED, summary=_slim(summary))
             events.emit("note", "La base tardó de más; lo reintento en el "
                                 "próximo minuto",
                         detail={"detalle": str(e)[:200]}, status="plan")
@@ -1624,13 +1624,46 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
                         "traceback": traceback.format_exc()[-1500:],
                         "duration_seconds": round(time.monotonic() - started, 2)})
         try:
-            store.finish_execution(execution_id, FAILED, summary=summary,
+            store.finish_execution(execution_id, FAILED, summary=_slim(summary),
                                    error=summary["error"])
             events.emit("error", f"Falló la ejecución: {e}", status="error")
             _note_health(store, ok=False, error=summary["error"])
         except Exception:
             pass
         return summary
+
+
+# What is worth keeping in the executions table, per tick, forever.
+#
+# A tick runs sixty times an hour and each one writes a row here. The review's
+# analysis -- the scored market, the ranked upgrades, the rival breakdown, the
+# recorded payload shapes -- is hundreds of kilobytes, it already lives in
+# `last_report`, and only the newest copy of it is ever worth anything. Stored
+# on every row it made the dashboard's own `select *` over ten rows time out.
+#
+# So the row keeps what a HISTORY needs: did it work, how long, what did it do,
+# what broke. The analysis is a snapshot, not a log.
+_EXECUTION_KEEP = ("ok", "mode", "deploy", "duration_seconds", "error",
+                   "traceback", "note", "degraded", "actions", "pending",
+                   "next_deadline", "sleep_seconds", "clock", "source")
+_REVIEW_KEEP = ("status", "reason", "seconds", "think_seconds", "skipped",
+                "money", "scheduled_bids")
+
+
+def _slim(summary):
+    """The execution row's summary: small, and the same shape every time."""
+    out = {k: summary[k] for k in _EXECUTION_KEEP if k in summary}
+    review = summary.get("review")
+    if isinstance(review, dict):
+        kept = {k: review[k] for k in _REVIEW_KEEP if k in review}
+        # The one analysis number a history actually wants: what it bought.
+        bids = review.get("bids") or {}
+        if isinstance(bids, dict):
+            kept["scheduled_bids"] = len(bids.get("scheduled") or [])
+        out["review"] = kept
+    elif review is not None:
+        out["review"] = review
+    return out
 
 
 def _note_health(store, ok, error=None):

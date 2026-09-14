@@ -198,6 +198,7 @@
   <div class="wrap">
     <!-- RESUMEN -->
     <div data-panel="resumen">
+      <div id="degraded" style="display:none"></div>
       <div class="kpis">
         <div class="card"><h3>Saldo</h3><div class="big" id="money">—</div>
           <div class="note" id="money-note">—</div></div>
@@ -398,6 +399,19 @@ function render(d){
       +esc(cand.nombre)+'</b><small>'+esc(cand.reason||'')+'</small></div>'
       +'<div class="right">'+esc(short(cand.clause))+'</div></div>')
     :'<div class="empty">Ningún jugador tuyo está en riesgo ahora.</div>';
+
+  /* ---- partes que la base no pudo servir ---- */
+  const deg=d.degraded||[];
+  const degBox=$('degraded');
+  if(degBox){
+    degBox.innerHTML=deg.length
+      ?('<div class="row"><span class="tag warn">'+deg.length+'</span><div class="m">'
+        +'La base tardó de más y estas partes no llegaron: '
+        +esc(deg.map(x=>x.part).join(', '))
+        +'<small>El bot sigue trabajando; se reintenta en el próximo minuto.</small>'
+        +'</div></div>'):'';
+    degBox.style.display=deg.length?'':'none';
+  }
 
   /* ---- por qué no pujó ---- */
   const bf=(rep.bids||{}).funnel||null, nsched=((rep.bids||{}).scheduled||[]).length;

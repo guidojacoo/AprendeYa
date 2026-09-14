@@ -369,9 +369,14 @@ class SupabaseStorage(Storage):
                             "summary": summary, "error": error},
                       prefer="return=minimal")
 
+    # Columns, not `*`. The summary is the only wide one and the dashboard reads
+    # a handful of keys out of it, so pulling ten rows of everything is how a
+    # status page times out on its own history.
+    _EXEC_COLS = "id,trigger,status,started_at,finished_at,error,summary"
+
     def recent_executions(self, limit=20):
-        return self._select("executions", {}, limit=limit,
-                            order="started_at.desc")
+        return self._select("executions", {"select": self._EXEC_COLS},
+                            limit=limit, order="started_at.desc")
 
     # --- locks ---------------------------------------------------------------
     def acquire_lock(self, name, ttl_seconds, holder):
