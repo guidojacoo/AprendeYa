@@ -574,7 +574,18 @@ function render(d){
         +'<ul>'+(o.reasons||[]).map(r=>'<li>'+esc(r)+'</li>').join('')
         +(o.expires_at?'<li>Cierra '+esc(when(o.expires_at,true))+'.</li>':'')
         +'</ul></details>').join('')
-    : '<div class="empty">Todavía no analizó el mercado — esperá a la primera revisión.</div>';
+    : '<div class="empty">'+(function(){
+        // "No lo miró" y "lo miró y no había nadie" son afirmaciones distintas.
+        // Mostrar la primera para las dos asusta, y encima es falsa.
+        if(!rep.at) return 'Todavía no analizó el mercado — esperá a la primera revisión.';
+        const c=rep.market_census||{};
+        if(c.anuncios==null) return 'La última revisión no encontró nada en venta.';
+        if(!c.ajenos) return 'Revisó a las '+esc(when(rep.at,true))+': había '
+          +esc(c.anuncios)+' anuncios y '+esc(c.mios)+' eran tuyos. '
+          +'Nadie más estaba en venta, así que no había nada que comprar. '
+          +'El mercado de LaLiga se renueva cada día.';
+        return 'Revisó '+esc(c.ajenos)+' anuncios ajenos y ninguno pasó el filtro.';
+      })()+'</div>';
 
   const flips=rep.flips||[];
   $('flips').innerHTML=flips.length

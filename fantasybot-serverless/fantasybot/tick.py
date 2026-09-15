@@ -1446,6 +1446,9 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         # The whole market, scored — including everything declined. Trimmed to
         # what a phone can render, not to what the bot considered.
         "market": (report.get("market") or [])[:30],
+        # How many listings there were and how many were not ours, so an empty
+        # market list can say which of the two things happened.
+        "market_census": report.get("market_census") or {},
         "upgrades": (report.get("upgrades") or [])[:10],
         "transfers": report.get("transfers") or [],
         "sells": (report.get("sells") or [])[:5],

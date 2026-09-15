@@ -360,6 +360,18 @@ def review(client, days_to_matchday=None):
     # turned down — which is the half that used to be invisible and the half you
     # ask about when a player you wanted goes to somebody else.
     ops = flip.opportunities(client, lid, owned=owned)
+    # What the market actually held when we looked. "No analizó el mercado" and
+    # "el mercado no tenía a nadie" are completely different statements and the
+    # page was showing the first for both — alarming, and wrong. The whole squad
+    # stands permanently listed, so most of what comes back is OURS: the number
+    # that matters is how many listings belong to somebody else.
+    market_census = {
+        "anuncios": len(market),
+        "mios": sum(1 for el in (market or [])
+                    if str(((el.get("playerMaster") or {}).get("id"))) in
+                    {str(p) for p in owned}),
+        "ajenos": len(ops),
+    }
     flips = [o for o in ops
              if o["margin_pct"] > 0 and o["buy_price"] <= team["teamMoney"]][:5]
     # What each signing would ADD to the eleven, which is the only question that
@@ -475,6 +487,7 @@ def review(client, days_to_matchday=None):
         "lineup": lineup_section,
         "flips": flips,
         "market": market,
+        "market_census": market_census,
         "upgrades": upgrade_list,
         # Signings the balance alone cannot reach, each paired with the player
         # who would fund it. Without this the bot is capped at whatever cash
