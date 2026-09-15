@@ -274,9 +274,19 @@ AUTO_MATCHDAY_LINEUP = _flag("FANTASYBOT_AUTO_MATCHDAY_LINEUP", True)
 # Keep the whole squad standing on the market. Listing is not selling — it is an
 # ask — so this is safe on its own: nothing leaves without AUTO_SELLS.
 AUTO_LIST = _flag("FANTASYBOT_AUTO_LIST", True)
-# Accept offers that meet a player's reserve price. This is the one that parts
-# with players, so it is off unless you turn it on.
-AUTO_SELLS = _flag("FANTASYBOT_AUTO_SELLS", False)
+# Accept offers that meet a player's reserve price.
+#
+# It is ON. With it off the whole selling model was theatre: the squad stands
+# permanently listed at prices the bot itself computed as "the least I would
+# genuinely accept", a rival offers at or above one of them, and nothing
+# happens. Offers sat unanswered until the listing expired — a yes the bot had
+# already decided and would not say.
+#
+# What makes that safe is the reserve, which is an ASK and not a wish: a starter
+# is priced at value +40%, a useful squad player +15%, a player already marked
+# for sale at par, and one out of LaLiga at -30%. Anything that clears those is
+# a sale this bot argued for on its own terms.
+AUTO_SELLS = _flag("FANTASYBOT_AUTO_SELLS", True)
 # Decline offers below the reserve instead of letting them sit until the listing
 # expires. Keeps the decision ours rather than the platform's.
 DECLINE_LOWBALLS = _flag("FANTASYBOT_DECLINE_LOWBALLS", True)

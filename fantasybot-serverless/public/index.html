@@ -216,6 +216,14 @@
 
     <!-- MERCADO -->
     <div data-panel="mercado" class="hide">
+      <section>
+        <button class="primary" id="scan">Analizar el mercado ahora</button>
+        <span id="scan-note" class="note" style="margin-left:8px"></span>
+        <div class="note">Relee el mercado, contesta las ofertas que tengas
+          abiertas y reprograma las pujas. Úsalo cuando falte poco para el
+          cierre y no quieras esperar a la revisión de la hora.</div>
+      </section>
+      <section><div id="market-age"></div></section>
       <section><h2>Por qué hace lo que hace</h2><div id="why"></div></section>
       <section><h2>Qué subiría más el once</h2>
         <div class="note">Puntos que gana mi alineación por jornada, y lo que cuesta cada uno.</div>
@@ -560,6 +568,19 @@ function render(d){
     'Ninguna venta desbloquea un fichaje que valga la pena.');
 
   /* ---- el mercado entero, puntuado ---- */
+  /* How old this reading is. A market that closes every day is worthless read
+     from yesterday, and the page was presenting a stale report exactly like a
+     fresh one -- same rows, no date, nothing to tell them apart. */
+  const repAge=rep.at?(Date.now()-new Date(rep.at).getTime())/60000:null;
+  const mktStale=repAge!=null&&repAge>90;
+  $('market-age').innerHTML=rep.at
+    ?('<div class="row"><span class="tag '+(mktStale?'bad':'ok')+'">'
+      +(mktStale?'desactualizado':'al día')+'</span><div class="m">'
+      +'Mercado leído '+esc(ago(rep.at))
+      +(mktStale?'<small>El mercado de LaLiga cierra todos los días: esto ya no '
+              +'sirve para decidir. Tocá «Analizar el mercado ahora».</small>':'')
+      +'</div></div>')
+    :'';
   const mk=rep.market||[];
   const scls=n=>n>=70?'ok':n>=58?'idle':n>=45?'warn':'bad';
   $('market').innerHTML=mk.length
@@ -866,6 +887,25 @@ $('testnotify').onclick=async e=>{
   }catch(err){$('run-note').textContent='Error: '+err.message;}
   b.disabled=false; b.textContent='Probar avisos';
 };
+$('scan').onclick=async e=>{
+  /* The same forced review the Sistema tab runs, put where the question gets
+     asked. A market closes on its own schedule and the review is hourly, so
+     "wait for the next one" is not an answer when it closes in ten minutes. */
+  const b=e.currentTarget, note=$('scan-note');
+  b.disabled=true; b.textContent='Analizando…'; note.textContent='';
+  try{
+    const r=await call('/api/admin?action=review',{method:'POST'});
+    const rev=(r&&r.result)||{};
+    const bids=((rev.bids||{}).scheduled||[]).length;
+    note.textContent=rev.status==='skipped'
+      ?('No llegó a correr: '+(rev.reason||'?'))
+      :(bids+' puja'+(bids===1?'':'s')+' programada'+(bids===1?'':'s')
+        +' · '+(rev.seconds||'?')+'s');
+    await load();
+  }catch(err){note.textContent='Error: '+err.message;}
+  b.disabled=false; b.textContent='Analizar el mercado ahora';
+};
+
 $('run').onclick=async e=>{
   const b=e.currentTarget; b.disabled=true; b.textContent='Ejecutando…';
   try{await call('/api/admin?action=review',{method:'POST'}); await load();}

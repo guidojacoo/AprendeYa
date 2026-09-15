@@ -1346,12 +1346,23 @@ def run_review(ctx, force=False):
         catchup = _schedule_catchup(skipped, now)
         reminders = _queue_reminders(report, dry_run=ctx.dry_run)
 
-        store.put_doc("last_review_at", to_iso(now))
+        # The REPORT first, the clock second. They were the other way round, and
+        # the order is the whole difference between two failures:
+        #
+        #   report stored, clock not  -> the next tick reviews again. Harmless.
+        #   clock stored, report not  -> the review is "done" for an hour and
+        #                                the page keeps yesterday's market,
+        #                                presented as if it were today's.
+        #
+        # The second is what happened: a review that stamped itself complete and
+        # then lost the write it existed to make. Anything that throws between
+        # these two lines now costs a repeated review instead of a blind hour.
         store.put_doc("last_report",
                       _summarize(report, lineup_res, bids_res, listings,
                                  clauses, shield, sources, gaps_res, skipped,
                                  think_seconds=think_seconds, catchup=catchup,
                                  defense=defense))
+        store.put_doc("last_review_at", to_iso(now))
         events.emit("review", f"Revisión: caja {report['money']:,} €",
                     detail={"flips": len(report.get("flips") or []),
                             "tasks": len(report.get("tasks") or []),
