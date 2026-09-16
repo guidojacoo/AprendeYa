@@ -106,16 +106,14 @@ def clause_targets(market, team, prob_index):
         pt = el.get("playerTeam", {})
         clause = num(pt.get("buyoutClause")) or None
         unlock = pt.get("buyoutClauseLockedEndTime")
-        # If his owner already has him ON SALE, bidding is the cheaper way in: the
-        # clause is a ~1.67x premium and it is locked for days, while the sale is open
-        # now and starts at his value. The sale is a DOOR OF ITS OWN: gating on an
-        # affordable clause first priced reachable listings out of the report just
-        # because their (irrelevant) clause was rich.
+        # His owner may also have him ON SALE, and bidding there would often be
+        # cheaper than the ~1.67x clause. We do not take that route: another
+        # manager's player is reached by paying his clause, full stop. The sale
+        # price is still read, because it is useful context on the page — it is
+        # simply never a plan.
         on_sale = ((num(el.get("salePrice")) or None)
                    if el.get("status") == "on_sale" else None)
-        via_clausula = bool(clause and unlock and clause <= money)
-        via_puja = bool(on_sale and on_sale <= money)
-        if not (via_clausula or via_puja):
+        if not (clause and unlock and clause <= money):
             continue
         info = match_name(pm.get("nickname", ""), pm.get("name", ""), prob_index)
         prob = info.get("prob") if info else None
@@ -133,8 +131,9 @@ def clause_targets(market, team, prob_index):
             "market_id": el.get("id") if on_sale else None,
             "sale_price": on_sale,
             "sale_expires": el.get("expirationDate") if on_sale else None,
-            "cheaper_via_bid": bool(on_sale and via_puja
-                                    and (not via_clausula or on_sale < clause)),
+            # Kept for the page, never acted on: a rival's player is a clause.
+            "cheaper_via_bid": False,
+            "on_sale_at": on_sale,
             "saving_vs_clause": ((clause - on_sale)
                                  if (clause and on_sale and on_sale < clause) else 0),
         })

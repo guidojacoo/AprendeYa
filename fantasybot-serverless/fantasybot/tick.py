@@ -632,7 +632,20 @@ def _plan_bids(ctx, client, lid, team, report):
              if o.get("market_id") is not None}
     for b in plan:
         mid = str(b["market_id"])
-        close_at = (by_id.get(mid) or {}).get("expires_at")
+        row = by_id.get(mid) or {}
+        # Only what LaLiga itself put up for sale.
+        #
+        # A rival's player reaches us by ONE route: his buyout clause. Bidding on
+        # another manager's listing is a different transaction with a different
+        # price, and the planner was doing it — a rival row is priced at his
+        # CLAUSE here, so every such "bid" offered a ~1.67x premium for a player
+        # the clause pipeline was already tracking properly.
+        if row.get("via") != SYSTEM_LISTING:
+            skipped.append({"market_id": mid, "nombre": b.get("nombre"),
+                            "reason": "es de otro manager: va por cláusula, "
+                                      "no por puja"})
+            continue
+        close_at = row.get("expires_at")
         if not close_at:
             skipped.append({"market_id": mid, "nombre": b.get("nombre"),
                             "reason": "el anuncio no trae hora de cierre"})
@@ -674,6 +687,12 @@ def _plan_bids(ctx, client, lid, team, report):
 
 # Don't spend on a signing who will not play. Same floor the clause hunter uses.
 MIN_SIGNING_PROB = 40
+
+# The only route a BID may take: a listing LaLiga itself published. Another
+# manager's player is reached by paying his clause, never by bidding on his
+# listing — a different transaction, at a different price, that the clause
+# pipeline already handles.
+SYSTEM_LISTING = "SISTEMA"
 
 
 def _points_per_euro(candidate, price):
@@ -730,8 +749,8 @@ def _plan_gap_signings(ctx, lid, team, report):
         # greedy answer to a knapsack, not a tiebreak bolted on afterwards.
         eligible = []
         for c in (needs.get("suggestions") or {}).get(pos) or []:
-            if c.get("via") not in ("SISTEMA", "PUJA"):
-                continue          # the clause route is planned elsewhere
+            if c.get("via") != SYSTEM_LISTING:
+                continue          # a rival's player goes through his clause
             if not c.get("disponible") or not c.get("expires"):
                 continue
             prob = c.get("prob")

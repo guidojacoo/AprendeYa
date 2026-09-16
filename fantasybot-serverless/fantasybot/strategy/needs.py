@@ -100,16 +100,13 @@ def candidates(client, league_id, position, prob_index=None, money=None, owned=N
                                      or num(pm.get("marketValue")))
         else:
             clause = num(el.get("playerTeam", {}).get("buyoutClause")) or None
-            # A player another manager has listed can simply be BID for, at his sale
-            # price. That is nearly always cheaper than his clause (~1.67x value) and
-            # available now instead of when the lock expires. Offering only the clause
-            # here was overpricing every signing from another squad.
+            # A player another manager has listed could be bid for at his sale
+            # price, which is usually cheaper than his ~1.67x clause. That route
+            # is deliberately not taken: a rival's player is signed by paying his
+            # clause, and nothing else. `sale` stays as context for the page.
             sale = (num(el.get("salePrice")) or None) \
                 if el.get("status") == "on_sale" else None
-            if sale and (clause is None or sale < clause):
-                via, price = "PUJA", sale
-            else:
-                via, price = "CLAUSULA", clause
+            via, price = "CLAUSULA", clause
         if not price:
             continue
         info = match_name(pm.get("nickname", ""), pm.get("name", ""), prob_index)
