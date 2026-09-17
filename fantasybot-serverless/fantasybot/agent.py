@@ -348,6 +348,10 @@ def review(client, days_to_matchday=None):
     # and which keeps standing when that scrape breaks. Never fatal: a failure
     # here leaves every estimate exactly where it was before.
     form_index = {}
+    try:
+        week_now = (client.current_week() or {}).get("weekNumber")
+    except Exception:                            # noqa: BLE001
+        week_now = None
 
     # date of the next matchday (for urgency and final lineup)
     kickoff = matchday.next_kickoff()
@@ -411,7 +415,14 @@ def review(client, days_to_matchday=None):
         best_ids = lineup_opt.payload_ids(best)
         lineup_changed = best_ids != _current_xi_ids(client, tid)
         lineup_section = {"formation": best["formation"], "changed": lineup_changed,
-                          "total": best["total"], "watch": best.get("watch", [])}
+                          "total": best["total"], "watch": best.get("watch", []),
+                          # The eleven itself, so the prediction that gets
+                          # scored later is the team actually fielded — tilted
+                          # by this week's fixtures — and not the untilted one
+                          # the selling logic uses.
+                          "xi": [best.get("goalkeeper")] + [
+                              e for line in ("defender", "midfield", "striker")
+                              for e in (best.get(line) or [])]}
     except ValueError as e:
         best, lineup_changed = None, False
         lineup_section = {"formation": None, "changed": False, "total": 0,
@@ -566,7 +577,8 @@ def review(client, days_to_matchday=None):
         # downstream formats it, compares it or subtracts from it, and the raw
         # field is a string: `f"{money:,}"` raises on one, silently.
         "money": num(team["teamMoney"]),
-        "matchday": {"kickoff": kickoff, "days": days_to_matchday},
+        "matchday": {"kickoff": kickoff, "days": days_to_matchday,
+                     "week": week_now},
         "lineup": lineup_section,
         "flips": flips,
         "market": market,

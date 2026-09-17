@@ -251,6 +251,9 @@
 
     <!-- LIGA -->
     <div data-panel="liga" class="hide">
+      <section><h2>Qué predijo y qué pasó</h2><div id="scoring"></div></section>
+      <section><h2>Movimientos de la plantilla</h2>
+        <div class="scroll" id="ledger"></div></section>
       <section><h2>Análisis de la partida</h2><div id="analysis"></div></section>
       <section><h2>Clasificación y caja estimada</h2>
         <div class="scroll" id="rivals"></div></section>
@@ -687,6 +690,41 @@ function render(d){
     +'<small>'+esc(when(b.at,true))+(b.why?' · '+esc(b.why):'')+'</small></div>'
     +'<div class="right">'+(b.amount?esc(short(b.amount)):'')+'</div></div>',
     'Todavía no se ejecutó ninguna puja.');
+
+  /* ---- qué predijo y qué pasó ---- */
+  const sc=rep.scoring||{}, acc=sc.accuracy||{};
+  $('scoring').innerHTML=(acc.weeks||sc.predicted||sc.settled)
+    ? ((sc.settled
+        ?'<div class="row"><span class="tag '
+         +(Math.abs(sc.settled.error||0)<=5?'ok':'warn')+'">jornada '
+         +esc(sc.settled.week)+'</span><div class="m">Esperaba '
+         +esc(sc.settled.expected)+' y saqué <b>'+esc(sc.settled.actual)+'</b>'
+         +'<small>diferencia '+esc(sc.settled.error)+' pts</small></div></div>':'')
+      +(sc.predicted
+        ?'<div class="row"><span class="tag idle">jornada '
+         +esc(sc.predicted.week)+'</span><div class="m">Espero <b>'
+         +esc(sc.predicted.expected)+'</b> pts con '+esc(sc.predicted.formation)
+         +'</div></div>':'')
+      +(acc.weeks
+        ?'<div class="row"><div class="m">Acierto del modelo'
+         +'<small>'+esc(acc.weeks)+' jornada(s) medidas · error medio '
+         +esc(acc.mean_abs_error)+' pts</small></div>'
+         +'<div class="right"><span class="tag '
+         +(Math.abs(acc.bias||0)<=3?'ok':'warn')+'">'
+         +((acc.bias||0)>0?'+':'')+esc(acc.bias)+'</span></div></div>'
+         +'<div class="row"><div class="m"><small>'
+         +((acc.bias||0)>0?'Saco MÁS de lo que estimo: mis números son tímidos.'
+           :(acc.bias||0)<0?'Saco MENOS de lo que estimo: mis números son generosos.'
+           :'Estimo bien.')+'</small></div></div>':''))
+    : '<div class="empty">Todavía no cerró ninguna jornada con predicción.</div>';
+
+  list($('ledger'),rep.ledger,e=>
+    '<div class="row"><span class="tag '+(e.how==='out'?'bad':'ok')+'">'
+    +(e.how==='out'?'salió':'entró')+'</span>'
+    +'<div class="m"><b>'+esc(e.nombre)+'</b><small>'+esc(when(e.at,true))
+    +(e.money_delta?' · caja '+((e.money_delta>0?'+':'')+short(e.money_delta)):'')
+    +'</small></div></div>',
+    'Todavía no entró ni salió nadie.');
 
   /* ---- análisis de la partida ---- */
   const rv0=rep.rivals||[], pnl=rep.pnl||null;

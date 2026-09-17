@@ -608,6 +608,56 @@ def _cancel_offside_bids(client, lid, log=print):
     return {"checked": len(rows), "cancelled": cancelled}
 
 
+def _score_the_model(report):
+    """Bank this gameweek's prediction, and settle any that results have landed for.
+
+    The optimiser has always said what it expects the eleven to score and that
+    number went nowhere, so the model was never wrong about anything — and a
+    model nobody scores cannot improve. Both halves are cheap: the prediction is
+    already computed, and the results come from the same `weekPoints` read the
+    form model already makes.
+    """
+    week = ((report.get("matchday") or {}).get("week")
+            if isinstance(report.get("matchday"), dict) else None)
+    lineup = report.get("lineup") or {}
+    out = {}
+    # The eleven ACTUALLY fielded, tilted by this week's fixtures — not the
+    # untilted one the selling logic builds.
+    if week and lineup.get("xi"):
+        got = memory.predict(week, {
+            "formation": lineup.get("formation"),
+            "total": lineup.get("total"),
+            "goalkeeper": None, "defender": [], "midfield": [],
+            "striker": [e for e in lineup["xi"] if e]})
+        if got:
+            out["predicted"] = {"week": week, "expected": got.get("expected"),
+                                "formation": got.get("formation")}
+    # Settle every week we are still waiting on, not only the last one: a
+    # gameweek can finish while the bot is asleep, and a prediction nobody ever
+    # settles is the same as never having made one.
+    form_index = report.get("form_index") or {}
+    if form_index:
+        by_player = {pid: hist[0]["points"] for pid, hist in form_index.items()
+                     if hist and hist[0].get("points") is not None}
+        if by_player and week:
+            settled = memory.settle(int(week) - 1, by_player)
+            if settled and settled.get("actual") is not None:
+                out["settled"] = {"week": int(week) - 1,
+                                  "expected": settled.get("expected"),
+                                  "actual": settled.get("actual"),
+                                  "error": settled.get("error")}
+                events.emit("note",
+                            f"Jornada {int(week) - 1}: esperaba "
+                            f"{settled.get('expected')} pts y saqué "
+                            f"{settled.get('actual')}",
+                            detail={"diferencia": settled.get("error"),
+                                    "jugadores medidos":
+                                        settled.get("settled_players")},
+                            status="plan")
+    out["accuracy"] = memory.accuracy()
+    return out
+
+
 def _react_to_squad_changes(report, team):
     """Notice that the squad changed, say so, and remember it.
 
@@ -1480,6 +1530,9 @@ def run_review(ctx, force=False):
 
         # First, before anything is planned: did the squad change under us?
         squad_change = _react_to_squad_changes(report, team)
+        # And how did the last one actually go? Cheap, and it is the only thing
+        # that tells us whether any of the rest of this works.
+        scoring_report = _score_the_model(report)
 
         lineup_res = ({"status": "skipped", "reason": "autonomy off"}
                       if not (config.AUTO_EXECUTE and config.AUTO_LINEUP)
@@ -1556,7 +1609,8 @@ def run_review(ctx, force=False):
                       _summarize(report, lineup_res, bids_res, listings,
                                  clauses, shield, sources, gaps_res, skipped,
                                  think_seconds=think_seconds, catchup=catchup,
-                                 defense=defense, squad_change=squad_change))
+                                 defense=defense, squad_change=squad_change,
+                                 scoring_report=scoring_report))
         store.put_doc("last_review_at", to_iso(now))
         events.emit("review", f"Revisión: caja {report['money']:,} €",
                     detail={"flips": len(report.get("flips") or []),
@@ -1633,7 +1687,7 @@ def _note_market_read(report):
 def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
                shield=None, sources=None, gaps_res=None, skipped_phases=None,
                think_seconds=None, catchup=None, defense=None,
-               squad_change=None):
+               squad_change=None, scoring_report=None):
     """What the dashboard reads. Deliberately small: a full review payload is
     hundreds of KB of squad data and there is no reason to store it every hour."""
     lu = report.get("lineup") or {}
@@ -1675,6 +1729,8 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "skipped_phases": skipped_phases or [],
         "squad_change": squad_change or {},
         "ledger": memory.recent(12),
+        # What it predicted, what happened, and how wrong it has been.
+        "scoring": scoring_report or {},
         # Next to the list of what was dropped, the two numbers that say why and
         # what happens about it: how long the analysis took before any of the
         # acting started, and when the re-run is due.

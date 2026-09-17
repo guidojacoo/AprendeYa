@@ -96,3 +96,119 @@ def describe(changes):
     if delta:
         line += f" · caja {'+' if delta > 0 else ''}{delta:,} €"
     return line
+
+
+# --- did it work? -----------------------------------------------------------
+#
+# The ledger above records what CHANGED. This records what the bot BELIEVED, and
+# then what actually happened, which is the only way it gets better at believing.
+#
+# Every gameweek the optimiser fields an eleven and says what it expects them to
+# score. That number was never written down anywhere, so it was never wrong
+# about anything: a model nobody scores is a model that cannot improve. Here the
+# prediction is banked when the XI is set, and settled against `weekPoints` once
+# LaLiga has published them.
+
+PREDICTIONS = "predictions"
+MAX_WEEKS = 20
+
+
+def _predictions(store):
+    got = store.get_doc(PREDICTIONS, None)
+    return got if isinstance(got, dict) else {}
+
+
+def predict(week, best, store=None):
+    """Bank what we expect this XI to score. Overwrites until the week starts.
+
+    Re-recording is correct: the XI is re-optimised before kickoff, and the
+    prediction that matters is the one attached to the team actually fielded.
+    A settled week is never overwritten — its result is history.
+    """
+    if not week or not best:
+        return None
+    store = store or get_storage()
+    try:
+        book = _predictions(store)
+        key = str(week)
+        if (book.get(key) or {}).get("actual") is not None:
+            return book[key]
+        players = [best.get("goalkeeper")] + [
+            e for line in ("defender", "midfield", "striker")
+            for e in (best.get(line) or [])]
+        entry = {
+            "at": to_iso(utcnow()),
+            "formation": "-".join(str(n) for n in (best.get("formation") or ())),
+            "expected": float(best.get("total") or 0),
+            "xi": [{"id": str(e.get("playerTeamId")), "nombre": e.get("nombre"),
+                    "expected": float(e.get("score") or 0)}
+                   for e in players if e],
+            "actual": None,
+        }
+        book[key] = entry
+        for old in sorted(book, key=lambda k: int(k) if k.isdigit() else 0)[:-MAX_WEEKS]:
+            book.pop(old, None)
+        store.put_doc(PREDICTIONS, book)
+        return entry
+    except Exception:                            # noqa: BLE001
+        return None
+
+
+def settle(week, points_by_player, store=None):
+    """Fill in what the fielded XI actually scored. Returns the settled entry.
+
+    `points_by_player` maps playerMaster id to that week's points. The XI is
+    keyed by roster slot, so the caller passes whichever mapping it has — an id
+    we cannot find contributes nothing rather than a zero, because "did not
+    play" and "we lost track of him" are different and only one is his fault.
+    """
+    if not week or not points_by_player:
+        return None
+    store = store or get_storage()
+    try:
+        book = _predictions(store)
+        entry = book.get(str(week))
+        if not entry or entry.get("actual") is not None:
+            return entry
+        total, known = 0.0, 0
+        for row in entry.get("xi") or []:
+            got = points_by_player.get(str(row.get("id")))
+            if got is None:
+                continue
+            row["actual"] = float(got)
+            total += float(got)
+            known += 1
+        if not known:
+            return entry            # nothing published yet; try again next tick
+        entry["actual"] = round(total, 1)
+        entry["settled_players"] = known
+        entry["error"] = round(entry["actual"] - float(entry.get("expected") or 0), 1)
+        book[str(week)] = entry
+        store.put_doc(PREDICTIONS, book)
+        return entry
+    except Exception:                            # noqa: BLE001
+        return None
+
+
+def accuracy(store=None):
+    """How well the model has been predicting, over the settled weeks.
+
+    `bias` is the part that is actionable: consistently positive means the
+    estimates are too shy, consistently negative means too generous. One week is
+    noise; a run of them is a number to correct by.
+    """
+    try:
+        book = _predictions(store or get_storage())
+    except Exception:                            # noqa: BLE001
+        return {}
+    done = [e for e in book.values() if isinstance(e, dict)
+            and e.get("actual") is not None]
+    if not done:
+        return {"weeks": 0}
+    errors = [float(e.get("error") or 0) for e in done]
+    return {
+        "weeks": len(done),
+        "bias": round(sum(errors) / len(errors), 2),
+        "mean_abs_error": round(sum(abs(x) for x in errors) / len(errors), 2),
+        "last": sorted(done, key=lambda e: e.get("at") or "")[-1],
+    }
