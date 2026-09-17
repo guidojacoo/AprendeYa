@@ -877,6 +877,16 @@ def _plan_clauses(ctx, lid, team, report):
     for t in targets:
         clause = int(t.get("clause") or 0)
         unlock = parse_iso(t.get("unlock"))
+        # Position is no longer the filter, so the BAR has to be. A clause is
+        # this bot's only irreversible spend and it carries a ~1.67x premium:
+        # paying one for a player who barely improves the eleven is the most
+        # expensive way there is to stand still.
+        gain = t.get("gain")
+        if gain is not None and gain < upgrades_mod.MIN_GAIN:
+            skipped.append({**_target_brief(t),
+                            "why": f"solo suma {gain} pts/jornada, no paga "
+                                   f"la prima de la cláusula"})
+            continue
         if t.get("cheaper_via_bid"):
             skipped.append({**_target_brief(t), "why": "cheaper to bid for him"})
             continue

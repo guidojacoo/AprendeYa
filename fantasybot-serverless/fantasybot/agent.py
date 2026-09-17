@@ -82,13 +82,31 @@ def captain_fixture_difficulty(client) -> dict:
         return {}
 
 
-def clause_targets(market, team, prob_index):
+def _clause_reason(pos, valuation):
+    if valuation and valuation.get("gain") is not None:
+        return (f"suma {valuation['gain']} pts/jornada al once "
+                f"({valuation.get('gain_per_million')} por millón)")
+    return f"refuerza {pos}"
+
+
+def clause_targets(market, team, prob_index, upgrades_by_id=None):
     """Other managers' players worth signing via buyout clause when it opens.
 
-    v1: the ones that fill a squad gap and you can afford. Each brings its unlock
-    time to schedule the reminder.
+    Ranked by what each one ADDS TO THE ELEVEN PER EURO — the same measure the
+    market signings use, so the two routes finally compete on one scale.
+
+    It used to consider only positions the squad was SHORT in, and then order
+    them by probability of starting. Both were wrong for a league scored on
+    points: a brilliant midfielder nobody could reach was invisible because the
+    squad already had three midfielders, and among the ones it did see, the
+    surest starter won rather than the one who adds the most. Position is not a
+    reason to sign somebody; points per euro is.
+
+    `upgrades_by_id` maps player id to his ranked valuation (see
+    strategy.upgrades). Without it the old ordering stands, so the CLI and the
+    tests keep working.
     """
-    gap_positions = set(needs_mod.gaps(team))
+    upgrades_by_id = upgrades_by_id or {}
     owned = {p["playerMaster"]["id"] for p in team["players"]}
     money = num(team["teamMoney"])
     targets = []
@@ -101,8 +119,6 @@ def clause_targets(market, team, prob_index):
         if pm["id"] in owned:
             continue
         pos = position_of(pm)
-        if pos not in gap_positions:
-            continue
         pt = el.get("playerTeam", {})
         clause = num(pt.get("buyoutClause")) or None
         unlock = pt.get("buyoutClauseLockedEndTime")
@@ -126,7 +142,10 @@ def clause_targets(market, team, prob_index):
             "clause": clause,
             "unlock": unlock,
             "prob": prob,
-            "reason": f"fills a {pos} gap",
+            "reason": _clause_reason(pos, upgrades_by_id.get(str(pm["id"]))),
+            "gain": (upgrades_by_id.get(str(pm["id"])) or {}).get("gain"),
+            "gain_per_million": (upgrades_by_id.get(str(pm["id"]))
+                                 or {}).get("gain_per_million"),
             # cheaper route, when there is one
             "market_id": el.get("id") if on_sale else None,
             "sale_price": on_sale,
@@ -137,7 +156,12 @@ def clause_targets(market, team, prob_index):
             "saving_vs_clause": ((clause - on_sale)
                                  if (clause and on_sale and on_sale < clause) else 0),
         })
-    targets.sort(key=lambda t: (t["prob"] or 0), reverse=True)
+    # Best points-per-euro first; a target we could not value falls to the back
+    # rather than jumping the queue on a probability.
+    targets.sort(key=lambda t: (t.get("gain_per_million") is not None,
+                                t.get("gain_per_million") or 0,
+                                t.get("gain") or 0,
+                                t.get("prob") or 0), reverse=True)
     return targets
 
 
@@ -406,7 +430,13 @@ def review(client, days_to_matchday=None):
                                    form_index=form_index)
 
     # 4) buyout targets + reminders
-    targets = clause_targets(market, team, prob_index)
+    # The same valuations the market signings are ranked by, keyed for lookup:
+    # a clause and a bid are two ways to sign a footballer, and they should be
+    # compared on one number rather than each having its own idea of "worth it".
+    targets = clause_targets(
+        market, team, prob_index,
+        upgrades_by_id={str(u.get("player_id")): u for u in upgrade_list
+                        if u.get("player_id") is not None})
     reminders = []
     close = market_close(market)
     if close:
