@@ -491,6 +491,13 @@ def review(client, days_to_matchday=None):
         "flips": flips,
         "market": market,
         "market_census": market_census,
+        # The three inputs a score is made of, carried so anything downstream
+        # scores a player the SAME way the XI did. Reserve prices were computed
+        # without them and fell back to a prior, which is how two keepers who
+        # never play were priced as assets.
+        "prob_index": prob_index,
+        "fixture_difficulty": fixture_difficulty,
+        "form_index": form_index,
         "upgrades": upgrade_list,
         # Signings the balance alone cannot reach, each paired with the player
         # who would fund it. Without this the bot is capped at whatever cash

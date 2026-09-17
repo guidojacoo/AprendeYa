@@ -557,6 +557,55 @@ def _rival_reach(report):
     return max(reachable), None
 
 
+def _cancel_offside_bids(client, lid, log=print):
+    """Drop queued bids on players we are no longer allowed to bid for.
+
+    Filtering the PLANNER only stops new ones. A bid already in the queue fires
+    on its own schedule, hours later, against a rule that changed after it was
+    written — and three of them were sitting there aimed at players other
+    managers had parked on the market, which is exactly the transaction this bot
+    does not do any more. A rival's player is reached by his clause.
+
+    It also covers the case that motivated the rule: friends who list a squad the
+    way we do, as a standing ask, and never accept. Money committed to those
+    auctions is money not bidding on what LaLiga actually put up for sale.
+    """
+    try:
+        rows = {str(r.get("id")): r for r in (client.market(lid) or [])}
+    except Exception as e:                       # noqa: BLE001
+        return {"checked": 0, "cancelled": [], "error": str(e)}
+    cancelled = []
+    for action in scheduler.pending(80):
+        if action.get("type") != BID:
+            continue
+        payload = action.get("payload") or {}
+        row = rows.get(str(payload.get("market_id")))
+        # Gone from the market is not our business here: the bid will find it
+        # missing and stand down on its own. Only a listing we can SEE and that
+        # is not LaLiga's gets pulled.
+        if row is None or bidding._is_laliga_listing(row):
+            continue
+        key = action.get("idempotency_key")
+        try:
+            scheduler.cancel(key)
+        except Exception:                        # noqa: BLE001
+            continue
+        nombre = (payload.get("nombre")
+                  or ((row.get("playerMaster") or {}).get("nickname")) or key)
+        cancelled.append({"nombre": nombre, "key": key,
+                          "why": "es de otro manager: se ficha por cláusula"})
+        log(f"[tick] cancelled bid on {nombre}: not a LaLiga listing")
+    if cancelled:
+        events.emit("note", f"Cancelé {len(cancelled)} puja(s) por jugadores "
+                            f"de otros managers",
+                    detail={"jugadores": ", ".join(c["nombre"]
+                                                   for c in cancelled),
+                            "why": "a un rival se lo ficha por cláusula, "
+                                   "no pujando por su anuncio"},
+                    status="plan")
+    return {"checked": len(rows), "cancelled": cancelled}
+
+
 def _plan_bids(ctx, client, lid, team, report):
     """Turn profitable flips into SCHEDULED bids instead of immediate ones.
 
@@ -1210,7 +1259,34 @@ def _listing_skips(team, market, planned):
     return reasons
 
 
-def _store_reserves(client, lid, team, best, sells):
+def _expected_points(team, report):
+    """Expected points per gameweek for every player we own, by roster slot.
+
+    Pricing a squad without this is how two reserve keepers ended up listed at
+    market value PLUS fifteen per cent — asked at a premium, all season, for
+    footballers who were never going to take the field. Nobody pays that, so
+    nothing sold, so the money stayed in them.
+    """
+    from .strategy import lineup as lineup_opt
+    prob_index = (report or {}).get("prob_index")
+    fixture = (report or {}).get("fixture_difficulty")
+    form_index = (report or {}).get("form_index")
+    out = {}
+    for p in team.get("players") or []:
+        pm = p.get("playerMaster") or {}
+        ptid = str(p.get("playerTeamId") or pm.get("id") or "")
+        if not ptid:
+            continue
+        try:
+            score, _prob, _disp, _tag = lineup_opt.player_score(
+                p, prob_index, fixture, form_index)
+        except Exception:                        # noqa: BLE001
+            continue
+        out[ptid] = round(float(score), 2)
+    return out
+
+
+def _store_reserves(client, lid, team, best, sells, report=None):
     """Work out what each player is worth to us, and write it down.
 
     Pulled out of `_plan_listings` because the offer handler runs on EVERY tick
@@ -1227,17 +1303,20 @@ def _store_reserves(client, lid, team, best, sells):
     store = get_storage()
     market = client.market(lid)
     days = _days_listed(store, team, market)
-    reserves = offers_mod.reserve_map(team, best, sells, listed_since=days)
+    expected = _expected_points(team, report)
+    reserves = offers_mod.reserve_map(team, best, sells, listed_since=days,
+                                      expected=expected)
     store.put_doc("reserves", reserves)
-    return market, days
+    return market, days, expected
 
 
-def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None):
+def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None,
+                   expected=None):
     """Queue a listing for every squad player not already on the market."""
     from .strategy import offers as offers_mod
 
     if market is None:
-        market, days = _store_reserves(client, lid, team, best, sells)
+        market, days, expected = _store_reserves(client, lid, team, best, sells)
     # AUTO_EXECUTE is the master switch, and this phase was the one that did not
     # ask. Observe-only mode meant "touch nothing", and listing the whole squad
     # is touching something: it puts every player of yours in front of the league
@@ -1248,10 +1327,11 @@ def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None):
                          else "off" if not config.AUTO_LIST
                          else "observe-only"),
                 "listed": [], "would_list": offers_mod.plan_listings(
-                    team, market, best, sells, listed_since=days)}
+                    team, market, best, sells, listed_since=days,
+                    expected=expected)}
 
     planned = offers_mod.plan_listings(team, market, best, sells,
-                                       listed_since=days)
+                                       listed_since=days, expected=expected)
     # Why the others were left out. "Listed 0" over a squad of fifteen with none
     # on the market is a silent refusal, and a silent refusal is indistinguishable
     # from a switch being off — which cost a day of guessing between the two.
@@ -1341,20 +1421,25 @@ def run_review(ctx, force=False):
         # Always, before anything that can be dropped for time: these are what
         # every tick uses to answer an offer.
         try:
-            market, days_listed = _store_reserves(client, lid, team, best,
-                                                  report.get("sells"))
+            market, days_listed, expected_pts = _store_reserves(
+                client, lid, team, best, report.get("sells"), report)
         except Exception as e:                   # noqa: BLE001
-            market, days_listed = None, None
+            market, days_listed, expected_pts = None, None, None
             skipped.append(f"reserves ({e})")
         # Listing comes BEFORE the phases that spend. It is the one that brings
         # money in, it is the cheapest of them, and it is the one that had never
         # run: the review kept reaching its budget among the phases that buy and
         # dropping the phase that sells. Selling first also funds the buying.
         listings = (_plan_listings(ctx, client, lid, team, best,
-                                   report.get("sells"), market, days_listed)
+                                   report.get("sells"), market, days_listed,
+                                   expected=expected_pts)
                     if _afford("listings", 8) else {"mode": "out of time"})
+        # Before planning anything new, retire what the rules no longer allow.
+        offside = _cancel_offside_bids(client, lid, log=ctx.log)
         bids_res = (_plan_bids(ctx, client, lid, remaining, report)
                     if _afford("bids", 10) else {"mode": "out of time"})
+        if offside.get("cancelled"):
+            bids_res = {**bids_res, "cancelled": offside["cancelled"]}
         clauses = (_plan_clauses(ctx, lid, team, report)
                    if _afford("clauses", 6) else {"queued": []})
         shield = (_plan_shield(ctx, lid, report)

@@ -118,6 +118,23 @@ def _seconds_left(close_iso):
     return (close - datetime.now(timezone.utc)).total_seconds()
 
 
+def _is_laliga_listing(row):
+    """Whether LaLiga put this up for sale, rather than another manager.
+
+    Not a single field: LaLiga ships market rows WITHOUT `discr` (flip.evaluate
+    carries a comment about a KeyError that killed a whole review over exactly
+    that), so reading one key and refusing everything else would block
+    legitimate bids the day the field goes missing. The real tell is ownership —
+    a rival's listing carries the team that owns him, with his clause on it.
+    """
+    discr = row.get("discr")
+    if discr == "marketPlayerLeague":
+        return True
+    if discr == "marketPlayerTeam":
+        return False
+    return not (row.get("playerTeam") or row.get("sellerTeam"))
+
+
 def _find(market, market_id):
     for e in market:
         if e.get("id") == market_id:
@@ -243,6 +260,7 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
     Returns a dict whose "status" is one of:
       bid       we placed it (amount / bid_id in the dict)
       gone      the listing is no longer in the market (closed or bought)
+      not_ours  another manager's listing — his clause is the only route in
       closed    the close time passed without the conditions to bid
       unpriced  no usable value, so no bid could be sized
       over_cap  the live value is above what we may pay — no legal bid exists
@@ -270,6 +288,17 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
     if not el:
         log(f"[bid] marketId {market_id} is not in the market (already closed?).")
         return {"status": "gone", "market_id": market_id}
+    # The last gate, at the point money moves. The planner filters and the queue
+    # is swept, but a bid queued before either existed still arrives here — and
+    # this is the only place that reads the listing as it is RIGHT NOW. A rival's
+    # player is signed by paying his clause; his listing is not ours to bid on,
+    # however it got into the queue.
+    if not _is_laliga_listing(el):
+        nombre = (el.get("playerMaster") or {}).get("nickname", market_id)
+        log(f"[bid] {nombre}: another manager's listing. Not bidding; "
+            f"he is reached by his clause.")
+        return {"status": "not_ours", "market_id": market_id, "nombre": nombre,
+                "why": "es de otro manager: se ficha por cláusula"}
     close_iso = el.get("expirationDate")
     nombre = el["playerMaster"].get("nickname", market_id)
     roof = ceiling if ceiling is not None else round(max_bid * (1 + VALUE_DRIFT))

@@ -33,6 +33,23 @@ SQUAD_PREMIUM = 0.15       # a bench player who is still an asset
 SELLABLE_PREMIUM = 0.0     # the sell advisor already flagged him
 DUMP_DISCOUNT = -0.30      # out of LaLiga: his value is going to zero, take the cash
 
+# A player who does not play for his REAL club.
+#
+# Two reserve keepers sat in this squad scoring nothing, priced as "bench player
+# who is still an asset" — market value plus fifteen per cent. Nobody pays a
+# premium for a man who will not take the field, so the listing never sold and
+# the money stayed locked in him all season.
+#
+# He is not an asset. He is cash we have not collected yet, and the reasoning is
+# the same one DUMP_DISCOUNT already applies to a player who left the league:
+# waiting does not make him worth more. So he is asked slightly UNDER his value,
+# which is what actually moves a player nobody wants at par.
+BENCH_DISCOUNT = -0.08
+
+# Expected points per gameweek below which a player is not an asset at all.
+# A genuine substitute keeper projects around 0.4; a starter, several times that.
+MIN_USEFUL_POINTS = 1.0
+
 # Below this, a listing is not worth the slot.
 MIN_LISTING_PRICE = 100_000
 
@@ -62,14 +79,26 @@ def _is_out_of_league(player):
     return (player.get("playerMaster") or {}).get("playerStatus") == "out_of_league"
 
 
-def premium_for(player, xi_ids, sell_ids):
-    """How much over market value this player must fetch before we let him go."""
+def premium_for(player, xi_ids, sell_ids, expected=None):
+    """How much over market value this player must fetch before we let him go.
+
+    `expected` maps playerTeamId to his expected points per gameweek. Without it
+    everything behaves as before; with it, a player who does not play is priced
+    to actually leave instead of sitting at a premium nobody will pay.
+    """
     pm = player.get("playerMaster") or {}
     ptid = str(player.get("playerTeamId") or pm.get("id"))
     if _is_out_of_league(player):
         return DUMP_DISCOUNT
     if ptid in {str(i) for i in xi_ids}:
         return XI_PREMIUM
+    # Checked BEFORE the sell list and before the squad default: a man who does
+    # not play is the clearest sell there is, whether or not an advisor flagged
+    # him, and he is certainly not worth a premium.
+    if expected is not None:
+        pts = expected.get(ptid)
+        if pts is not None and pts < MIN_USEFUL_POINTS:
+            return BENCH_DISCOUNT
     if str(pm.get("id")) in {str(i) for i in sell_ids}:
         return SELLABLE_PREMIUM
     return SQUAD_PREMIUM
@@ -88,12 +117,13 @@ def decayed_premium(premium, days_listed):
     return max(0.0, premium - premium * PREMIUM_DECAY_PER_DAY * stale_days)
 
 
-def reserve_price(player, xi_ids, sell_ids, days_listed=0):
+def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None):
     """The least we would accept — and therefore what we list him at."""
     value = _market_value(player)
     if not value:
         return 0
-    premium = decayed_premium(premium_for(player, xi_ids, sell_ids), days_listed)
+    premium = decayed_premium(
+        premium_for(player, xi_ids, sell_ids, expected), days_listed)
     return max(0, round(value * (1 + premium)))
 
 
@@ -115,7 +145,7 @@ def _listed_player_ids(market):
 
 
 def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRICE,
-                  listed_since=None):
+                  listed_since=None, expected=None):
     """Squad players that should be put on the market, and at what price.
 
     Everyone not already listed goes up, each at his own reserve. Starters
@@ -133,7 +163,8 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
         if pid in already:
             continue
         days = (listed_since or {}).get(pid, 0)
-        price = reserve_price(p, xi_ids, sell_ids, days_listed=days)
+        price = reserve_price(p, xi_ids, sell_ids, days_listed=days,
+                              expected=expected)
         if price < min_price:
             continue      # not worth a listing slot
         out.append({
@@ -144,7 +175,9 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
             "value": _market_value(p),
             "price": price,
             "premium_pct": round(100 * decayed_premium(
-                premium_for(p, xi_ids, sell_ids), days)),
+                premium_for(p, xi_ids, sell_ids, expected), days)),
+            "expected_points": (expected or {}).get(
+                str(p.get("playerTeamId") or pm.get("id"))),
             "days_listed": days,
             "in_xi": str(p.get("playerTeamId") or pm.get("id")) in
                      {str(i) for i in xi_ids},
@@ -182,7 +215,8 @@ def _offers_on(row):
     return out
 
 
-def reserve_map(team, best=None, sells=None, listed_since=None):
+def reserve_map(team, best=None, sells=None, listed_since=None,
+                expected=None):
     """{playerMaster id: reserve price} for the whole squad.
 
     Computed once per review and cached, because working it out needs the optimal
@@ -197,7 +231,8 @@ def reserve_map(team, best=None, sells=None, listed_since=None):
         if pid is not None:
             out[str(pid)] = reserve_price(
                 p, xi_ids, sell_ids,
-                days_listed=(listed_since or {}).get(str(pid), 0))
+                days_listed=(listed_since or {}).get(str(pid), 0),
+                expected=expected)
     return out
 
 
