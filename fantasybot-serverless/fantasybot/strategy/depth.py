@@ -117,7 +117,15 @@ def rebuild(team, ranked, cards, sellable_rows, money=0, reserve=0,
     """
     spare = max(0, int(num(money)) - int(num(reserve)))
     base = squad_points(team, prob_index, fixture_difficulty, form_index)
-    buys = [r for r in (ranked or []) if r.get("market_id") is not None][:TOP_BUYS]
+    # A price of zero is not a free footballer, it is a price we failed to read
+    # — `num` turns a missing or malformed field into 0, and three of those
+    # would sail through the budget check and propose an eighty-million move
+    # against an empty account. `rank` already drops them; this does not depend
+    # on that, because the promise "a plan can pay for itself" has to hold for
+    # whoever calls this, not just for the one caller that filters first.
+    buys = [r for r in (ranked or [])
+            if r.get("market_id") is not None
+            and int(num(r.get("buy_price"))) > 0][:TOP_BUYS]
     # Cheapest to give up first: sellable is already ordered by what leaving costs.
     sells = [r for r in (sellable_rows or []) if r.get("raises")][:TOP_SELLS]
 
@@ -148,6 +156,14 @@ def rebuild(team, ranked, cards, sellable_rows, money=0, reserve=0,
                 if all(b.get("gain") is not None for b in pick):
                     if sum(float(b["gain"]) for b in pick) - lost < MIN_GAIN:
                         continue
+                # A sale has to be NEEDED. The search happily attaches a
+                # harmless one to a purchase that was already affordable —
+                # "sell the 500k reserve keeper to buy a 22M midfielder" — which
+                # is not a plan, it is the same plan with a pointless disposal
+                # stapled to it. If the cash covers the buys, there is nothing
+                # to fund.
+                if sale and price <= spare:
+                    continue
                 pms = [cards.get(str(b.get("player_id"))) for b in pick]
                 if not all(pms):
                     continue
@@ -176,10 +192,25 @@ def rebuild(team, ranked, cards, sellable_rows, money=0, reserve=0,
                     "left_over": budget - price,
                     "why": _why(pick, sale, gained, lost, net),
                 })
-    plans.sort(key=lambda p: (-p["net_gain"], p["spend"]))
+    # One entry per set of signings. Two plans that buy the same players are the
+    # same plan; keeping both spends the caller's three slots showing one idea
+    # twice, and pushes a genuinely different move off the list.
+    plans.sort(key=lambda p: (-p["net_gain"], len(p["sell"]), p["spend"]))
+    seen, unique = set(), []
     for p in plans:
+        key = tuple(sorted(b["market_id"] for b in p["buy"]))
+        if key in seen:
+            continue
+        seen.add(key)
         p["evaluations"] = evaluations
-    return plans[:limit]
+        # The money, spelled out. A plan the reader cannot check is a plan the
+        # reader has to trust, and this one asks to sell a footballer.
+        p["cash"] = spare
+        p["from_sales"] = int(sum(int(num(x["raises"])) * SALE_HAIRCUT
+                                  for x in p["sell"]))
+        p["affordable"] = p["spend"] <= p["cash"] + p["from_sales"]
+        unique.append(p)
+    return unique[:limit]
 
 
 def _why(pick, sale, gained, lost, net):

@@ -585,7 +585,15 @@ function render(d){
     +'<b>'+esc((r.buy||[]).map(b=>b.nombre).join(' + '))+'</b>'
     +((r.sell||[]).length?' <span class="k">por '
       +esc(r.sell.map(x=>x.nombre).join(' + '))+'</span>':'')
-    +'<small>'+esc(r.why||'')+'</small></div>'
+    +'<small>'+esc(r.why||'')+'</small>'
+    /* The money, spelled out. A plan that asks to sell a footballer has to be
+       checkable from the phone: what it costs, what is in the account, and
+       what the sale actually contributes after the haircut. */
+    +(r.cash===undefined?'':'<small class="k">gasta '+esc(short(r.spend))
+      +' · caja '+esc(short(r.cash))
+      +(r.from_sales?' · la venta aporta '+esc(short(r.from_sales)):' · sin vender nada')
+      +(r.affordable===false?' · NO ALCANZA':'')+'</small>')
+    +'</div>'
     +'<div class="right">'+esc(short(r.spend))+'</div></div>',
     'Ninguna movida completa mejora el once ahora mismo.');
 
