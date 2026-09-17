@@ -103,7 +103,15 @@ class ItReachesThePage(unittest.TestCase):
     """Scoring the market is worth nothing if the dashboard never sees it. The
     summary is the only thing stored, so that is where this has to hold."""
 
-    def test_the_summary_carries_the_scored_market(self):
+    def test_the_summary_carries_the_WHOLE_scored_market(self):
+        """Every listing, not a top thirty.
+
+        "Todo el mercado, puntuado" has to mean all of it: a verdict on one
+        player and silence on the next is worse than no list at all, because
+        you cannot tell a rejection from an omission. This is one document
+        rewritten hourly — the executions table was the thing that needed
+        slimming, and it is slimmed elsewhere.
+        """
         from fantasybot import tick
         # Half-point steps so no two land on the same score: above +25% the
         # scale caps at 100 and the order is decided by price instead.
@@ -111,9 +119,18 @@ class ItReachesThePage(unittest.TestCase):
                                for i in range(40)])
         got = tick._summarize({"money": 1, "market": market,
                                "flips": [], "lineup": {}}, {}, {})
-        self.assertEqual(len(got["market"]), 30, "trimmed for a phone, not empty")
+        self.assertEqual(len(got["market"]), 40)
         self.assertEqual(got["market"][0]["nombre"], "p39")
         self.assertIn("reasons", got["market"][0])
+
+    def test_nothing_is_scored_and_then_dropped(self):
+        """The scorer used to stop at 40 and the summary at 30, so a market of
+        sixty had twenty players judged and never shown, and twenty never
+        judged at all."""
+        import inspect
+
+        from fantasybot import agent
+        self.assertIn("limit=None", inspect.getsource(agent.review))
 
     def test_the_log_names_both_sides_of_the_read(self):
         from unittest import mock

@@ -583,8 +583,14 @@ function render(d){
     :'';
   const mk=rep.market||[];
   const scls=n=>n>=70?'ok':n>=58?'idle':n>=45?'warn':'bad';
+  const mkHead=mk.length
+    ?('<div class="row"><span class="tag idle">'+mk.length+'</span><div class="m">'
+      +'jugadores analizados, todos con su veredicto'
+      +'<small>'+esc(mk.filter(o=>o.verdict==='comprar'||o.score>=70).length)
+      +' valen la pena · '+esc(mk.filter(o=>!o.affordable).length)
+      +' no alcanzan</small></div></div>'):'';
   $('market').innerHTML=mk.length
-    ? mk.map(o=>'<details class="why"><summary>'
+    ? mkHead+mk.map(o=>'<details class="why"><summary>'
         +'<span class="score '+scls(o.score)+'">'+esc(o.score)+'</span>'
         +'<span class="grow"><b>'+esc(o.nombre)+'</b>'
         +'<small>'+esc(o.pos||'?')+' · '+esc(o.via||'')+' · '+esc(o.verdict)

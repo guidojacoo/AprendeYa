@@ -382,7 +382,11 @@ def review(client, days_to_matchday=None):
         fixture_difficulty=fixture_difficulty, limit=20,
         form_index=form_index)
     market = scoring.rank(ops, prob_index=prob_index, money=team["teamMoney"],
-                          limit=40,
+                          # No limit. "Todo el mercado, puntuado" has to mean
+                          # all of it: a verdict on one player and silence on
+                          # the next is worse than no list, because you cannot
+                          # tell a rejection from an omission.
+                          limit=None,
                           # Judged against the man he would actually push out of
                           # the XI, not against an abstract average. "Mejor que
                           # un titular corriente" is not a reason to sign

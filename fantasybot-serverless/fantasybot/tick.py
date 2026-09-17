@@ -1238,8 +1238,15 @@ def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None):
 
     if market is None:
         market, days = _store_reserves(client, lid, team, best, sells)
-    if not config.AUTO_LIST or ctx.dry_run:
-        return {"mode": "off" if not config.AUTO_LIST else "dry-run",
+    # AUTO_EXECUTE is the master switch, and this phase was the one that did not
+    # ask. Observe-only mode meant "touch nothing", and listing the whole squad
+    # is touching something: it puts every player of yours in front of the league
+    # at a price. It only stayed hidden because the review often ran out of time
+    # before reaching this phase.
+    if not (config.AUTO_LIST and config.AUTO_EXECUTE) or ctx.dry_run:
+        return {"mode": ("dry-run" if ctx.dry_run
+                         else "off" if not config.AUTO_LIST
+                         else "observe-only"),
                 "listed": [], "would_list": offers_mod.plan_listings(
                     team, market, best, sells, listed_since=days)}
 
@@ -1475,7 +1482,10 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "flips": (report.get("flips") or [])[:5],
         # The whole market, scored — including everything declined. Trimmed to
         # what a phone can render, not to what the bot considered.
-        "market": (report.get("market") or [])[:30],
+        # Every listing, not the top thirty. This is a single document rewritten
+        # once an hour — not the executions table, which is what actually had to
+        # be slimmed — and a market runs to a few dozen rows.
+        "market": report.get("market") or [],
         # How many listings there were and how many were not ours, so an empty
         # market list can say which of the two things happened.
         "market_census": report.get("market_census") or {},
@@ -1576,6 +1586,23 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
     net.set_deadline(time.monotonic() + ctx.budget_seconds)
 
     try:
+        # A human who pressed "analyse the market now" wants the analysis, not
+        # the queue drained. The review used to come LAST, after every due action
+        # and every open offer — so with a dozen actions waiting, the tick spent
+        # its whole budget before reaching it and the review never ran. Worse, it
+        # said nothing: the branch below simply did not execute and `review` was
+        # absent from the answer, which reads exactly like a review that found
+        # nothing. On a forced run the order is inverted.
+        if force_review and mode != "sniper":
+            try:
+                summary["review"] = run_review(ctx, force=True)
+            except Exception as e:               # noqa: BLE001
+                summary["review"] = {
+                    "status": "error", "error": f"{type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc()[-1200:]}
+                events.emit("error", f"Falló la revisión: {e}", status="error")
+                failed.append(f"review: {type(e).__name__}: {e}")
+
         summary["actions"] = scheduler.run_due(ctx, log=log)
 
         # Offers arrive and expire between reviews, so they are handled on every
@@ -1588,7 +1615,15 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
 
         # A sniper tick exists only to hit a close; it must not spend its seconds
         # on a market review.
-        if mode != "sniper" and not ctx.out_of_time(margin=15):
+        if "review" in summary:
+            pass          # a forced run already did it, first
+        elif mode != "sniper" and ctx.out_of_time(margin=15):
+            # Say so. An absent `review` key and a review that found nothing
+            # render identically, and the difference is the whole answer to
+            # "why did nothing happen when I pressed the button".
+            summary["review"] = {"status": "skipped",
+                                 "reason": "no quedó tiempo en este tick"}
+        elif mode != "sniper":
             # Contained, like the offer handling above it. One unexpected row in
             # the market used to raise out of the review and take the whole tick
             # with it — the health note, the token check and the scheduler repair
