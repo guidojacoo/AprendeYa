@@ -51,11 +51,30 @@ class OnlyLaLigasOwnListingsAreBidOn(StorageTestCase):
         self.assertEqual(len(got["scheduled"]), 1)
         self.assertEqual(got["scheduled"][0]["nombre"], "Libre")
 
-    def test_a_rivals_listing_is_refused_and_says_why(self):
+    def test_a_rivals_listing_never_reaches_the_budget(self):
+        """Dropped BEFORE the three best are chosen, not after.
+
+        Filtering afterwards was the bug: the three best points-per-euro in the
+        whole market were picked first, rivals included, then thrown out for
+        being unbiddable — three slots spent on players we were never going to
+        bid for, with the LaLiga listings behind them never considered. A live
+        run had eighteen candidates worth signing and scheduled zero.
+        """
         got = self._plan([_upgrade("m2", "CLAUSULA", "DeOtro")])
         self.assertEqual(got["scheduled"], [])
-        self.assertEqual(len(got["skipped"]), 1)
-        self.assertIn("cláusula", got["skipped"][0]["reason"])
+        self.assertEqual(
+            got["funnel"]["de otros managers (van por cláusula)"], 1)
+        self.assertEqual(got["funnel"]["anuncios de LaLiga"], 0)
+
+    def test_rivals_do_not_crowd_out_the_free_agents(self):
+        """The exact shape of the live failure: the richest points-per-euro are
+        all rival-owned, and a LaLiga listing sits behind them."""
+        rich = [{**_upgrade(f"r{i}", "CLAUSULA", f"DeOtro{i}"),
+                 "gain_per_million": 9.0, "gain": 9.0} for i in range(3)]
+        libre = {**_upgrade("m9", "SISTEMA", "Libre"),
+                 "gain_per_million": 0.5, "gain": 2.0}
+        got = self._plan(rich + [libre])
+        self.assertEqual([r["nombre"] for r in got["scheduled"]], ["Libre"])
 
     def test_a_mixed_market_keeps_only_the_free_agents(self):
         got = self._plan([_upgrade("m1", "SISTEMA", "Libre"),

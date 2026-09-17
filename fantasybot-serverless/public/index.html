@@ -430,7 +430,10 @@ function render(d){
          +'pujas programadas para el cierre</div></div>'
         :'<div class="row"><span class="tag warn">0</span><div class="m">'
          +'No programó ninguna puja'+((rep.bids||{}).budget
-            ?' con '+short(rep.bids.budget)+' en caja':'')+'</div></div>')
+            ?' con '+short(rep.bids.budget)+' en caja':'')
+         +(bfClause?'<small>'+esc(bfClause)+' de los candidatos son de '
+           +'otros managers: esos se fichan por cláusula, no pujando.'
+           +'</small>':'')+'</div></div>')
       +Object.entries(bf).map(([k,v])=>
         '<div class="row"><div class="m">'+esc(k)+'</div>'
         +'<div class="right"><span class="num">'

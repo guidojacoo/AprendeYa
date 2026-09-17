@@ -637,7 +637,19 @@ def _plan_bids(ctx, client, lid, team, report):
     # a trader finishes the season rich and second; the league is scored on
     # points. `execute.plan_bids` remains the CLI's margin-ordered plan and the
     # fallback for a review that produced no ranking.
-    candidates = report.get("upgrades") or []
+    # Only what we can actually BID on, BEFORE the budget picks its three.
+    #
+    # The filter used to sit after `best_plan`, which is a different thing
+    # entirely: the three best points-per-euro in the whole market were chosen
+    # first — rival-owned players included — and only then thrown out for being
+    # unbiddable. Three slots spent on players we were never going to bid for,
+    # and the LaLiga listings behind them never even considered. The run that
+    # found this had eighteen candidates worth signing and scheduled nothing.
+    #
+    # A rival's player is not lost by this: he goes to the clause pipeline,
+    # ranked by the same points-per-euro measure.
+    candidates = [r for r in (report.get("upgrades") or [])
+                  if r.get("via") == SYSTEM_LISTING]
     ranked = [r for r in candidates if upgrades_mod.worth_signing(r)]
     budget = int(num(team.get("teamMoney")))
     # Where the candidates went. "scheduled_bids: 0" with forty-four million in
@@ -645,7 +657,10 @@ def _plan_bids(ctx, client, lid, team, report):
     # market was empty, everyone was too expensive, or nobody was worth the
     # points. Each of those is a different problem and two of them are bugs.
     funnel = {
-        "en el mercado": len(candidates),
+        "anuncios de LaLiga": len(candidates),
+        "de otros managers (van por cláusula)": len(
+            [r for r in (report.get("upgrades") or [])
+             if r.get("via") != SYSTEM_LISTING]),
         "no me alcanza": sum(1 for r in candidates if not r.get("affordable")),
         "suman muy poco": sum(1 for r in candidates
                               if r.get("affordable")
