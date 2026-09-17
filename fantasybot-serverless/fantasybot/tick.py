@@ -32,6 +32,7 @@ from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
                         TickContext)
 from .matching import num
 from .strategy import clausedefense as clausedef
+from .strategy import timing
 from .strategy import upgrades as upgrades_mod
 from .storage import (DONE, FAILED, RUNNING, SKIPPED, StorageUnavailable,
                       get_storage, parse_iso, to_iso,
@@ -863,6 +864,14 @@ def _plan_clauses(ctx, lid, team, report):
     targets = report.get("clause_targets") or []
     if not targets:
         return {"mode": "on" if config.AUTO_CLAUSES else "off", "queued": []}
+    # The best thing we could sign RIGHT NOW, which is what waiting is measured
+    # against. Only LaLiga's own listings: a rival's player is itself a clause.
+    best_now_gain = max(
+        ((u.get("gain") or 0) for u in (report.get("upgrades") or [])
+         if u.get("via") == SYSTEM_LISTING and upgrades_mod.worth_signing(u)),
+        default=0.0)
+    kickoff = ((report.get("matchday") or {}).get("kickoff")
+               if isinstance(report.get("matchday"), dict) else None)
     money = int(num(team.get("teamMoney")))
     spendable = max(0, money - config.CASH_RESERVE)
     if config.MAX_CLAUSE:
@@ -887,6 +896,17 @@ def _plan_clauses(ctx, lid, team, report):
                             "why": f"solo suma {gain} pts/jornada, no paga "
                                    f"la prima de la cláusula"})
             continue
+        # Is he worth WAITING for? The unlock instant is LaLiga's, not ours, so
+        # the real question is whether to hold the money for him or spend it
+        # today on the best thing actually available. A gameweek played with a
+        # worse eleven is not refunded when the signing finally lands.
+        if gain is not None and t.get("unlock"):
+            verdict = timing.worth_waiting(gain, best_now_gain, t["unlock"],
+                                           kickoff)
+            t = {**t, "timing": verdict}
+            if not verdict["wait"]:
+                skipped.append({**_target_brief(t), "why": verdict["why"]})
+                continue
         if t.get("cheaper_via_bid"):
             skipped.append({**_target_brief(t), "why": "cheaper to bid for him"})
             continue

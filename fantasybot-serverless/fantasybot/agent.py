@@ -227,8 +227,9 @@ def _sync_tasks(gaps, targets, sells, lineup_changed):
                     f"{t['clause']:,} clause. Closes {t['sale_expires']}.")
             due = t["sale_expires"]
         else:
-            text = (f"Buyout {t['nombre']} ({t['pos']}) for {t['clause']:,} "
-                    f"when its clause opens.")
+            text = (f"Clausular a {t['nombre']} ({t['pos']}) por "
+                    f"{t['clause']:,} € cuando abra: "
+                    f"{t.get('reason') or 'refuerza el once'}.")
             due = t["unlock"]
         state.add_task(text, due=due, key=f"clause:{t['player_id']}")
     state.complete_missing("clause:", {f"clause:{t['player_id']}" for t in targets})
@@ -458,8 +459,15 @@ def review(client, days_to_matchday=None):
                 "key": f"clause:{t['player_id']}:{t['unlock']}",
                 "fire_at": (dt - timedelta(seconds=60)).isoformat(),
                 "event_at": t["unlock"],
-                "message": (f"{t['nombre']}'s clause opens: prepare a buyout "
-                            f"of {t['clause']:,} ({t['reason']})."),
+                # The reason, in the language the page speaks, and with the
+                # number that decides it. "(fills a POR gap)" was both English
+                # and out of date: position stopped being why we sign anybody.
+                "message": (f"Se abre la cláusula de {t['nombre']}: "
+                            f"{t['clause']:,} € — {t.get('reason') or ''}"
+                            + (f" · esperarlo cuesta "
+                               f"{(t.get('timing') or {}).get('cost_of_waiting')} pts"
+                               if (t.get("timing") or {}).get("gameweeks_missed")
+                               else "")),
             })
     # The lineup lock is about the NEXT gameweek that hasn't started — not today's match
     # if the current jornada is already under way (its lineup is already locked). A
