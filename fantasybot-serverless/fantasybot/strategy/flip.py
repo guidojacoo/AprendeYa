@@ -98,6 +98,8 @@ def evaluate(element, index, horizon, today_iso=None):
         # last-minute bid; nothing else reads it.
         "expires_at": element.get("expirationDate"),
         "pos": position_of(pm, "?"),
+        # Which club he plays for, so the scorer can look up who they face.
+        "team_id": (pm.get("team") or {}).get("id"),
         "via": via,
         "owner": owner,
         "valor_actual": trend["valor"],

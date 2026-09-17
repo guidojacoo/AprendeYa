@@ -24,6 +24,7 @@ from .strategy import shield as shield_mod
 from .sources.lineups import probable_lineups
 from .sources.market_trends import trends_index
 from .sources import form
+from .sources import standings
 from .sources import matchday
 from .sources import value_history
 
@@ -87,6 +88,32 @@ def _clause_reason(pos, valuation):
         return (f"suma {valuation['gain']} pts/jornada al once "
                 f"({valuation.get('gain_per_million')} por millón)")
     return f"refuerza {pos}"
+
+
+def _tilt_fixtures(prior_by_team, strength, played, client, week_now):
+    """Re-point the difficulty map at each club's OPPONENT, using the table.
+
+    `prior_by_team[t]` is how hard the club t FACES this week, priced off squad
+    value. The table gives how strong each club IS, so the opponent has to be
+    looked up through the fixtures again before the two can be blended.
+    """
+    try:
+        fixtures = client.calendar(week_now) or []
+    except Exception:                            # noqa: BLE001
+        return prior_by_team
+    blended = standings.blend(strength, {}, played)
+    out = dict(prior_by_team or {})
+    for m in fixtures:
+        home = str(m.get("localId")) if m.get("localId") is not None else None
+        away = str(m.get("visitorId")) if m.get("visitorId") is not None else None
+        for me, rival in ((home, away), (away, home)):
+            if not me or not rival or rival not in blended:
+                continue
+            prior = out.get(me, 0.5)
+            trust = standings.RESULTS_WEIGHT * min(
+                1.0, played.get(rival, 0) / float(standings.FULL_SAMPLE))
+            out[me] = round(prior * (1 - trust) + blended[rival] * trust, 3)
+    return out
 
 
 def clause_targets(market, team, prob_index, upgrades_by_id=None):
@@ -365,6 +392,19 @@ def review(client, days_to_matchday=None):
         # the fixture away and fielded the same XI against the leaders as
         # against the bottom club.
         fixture_difficulty = captain_fixture_difficulty(client)
+        # Tilt it by how the clubs are ACTUALLY playing. The value prior says
+        # Madrid are hard; the table says whether the club we face on Sunday has
+        # won a game since August. Purely additive — a season with nothing
+        # played, or a read that fails, leaves the prior exactly as it was.
+        try:
+            week_now = (client.current_week() or {}).get("weekNumber")
+            if week_now:
+                form_tbl, played = standings.team_form(client, week_now)
+                if form_tbl:
+                    fixture_difficulty = _tilt_fixtures(
+                        fixture_difficulty, form_tbl, played, client, week_now)
+        except Exception:                        # noqa: BLE001
+            pass
         best = lineup_opt.optimize(team, prob_index, premium=premium,
                                    fixture_difficulty=fixture_difficulty,
                                    form_index=form_index)
@@ -407,6 +447,8 @@ def review(client, days_to_matchday=None):
         fixture_difficulty=fixture_difficulty, limit=20,
         form_index=form_index)
     market = scoring.rank(ops, prob_index=prob_index, money=team["teamMoney"],
+                          form_index=form_index,
+                          fixture_difficulty=fixture_difficulty,
                           # No limit. "Todo el mercado, puntuado" has to mean
                           # all of it: a verdict on one player and silence on
                           # the next is worse than no list, because you cannot

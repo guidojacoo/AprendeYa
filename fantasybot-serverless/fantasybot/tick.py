@@ -32,6 +32,7 @@ from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
                         TickContext)
 from .matching import num
 from .strategy import clausedefense as clausedef
+from . import memory
 from .strategy import timing
 from .strategy import upgrades as upgrades_mod
 from .storage import (DONE, FAILED, RUNNING, SKIPPED, StorageUnavailable,
@@ -605,6 +606,41 @@ def _cancel_offside_bids(client, lid, log=print):
                                    "no pujando por su anuncio"},
                     status="plan")
     return {"checked": len(rows), "cancelled": cancelled}
+
+
+def _react_to_squad_changes(report, team):
+    """Notice that the squad changed, say so, and remember it.
+
+    `state.diff_snapshots` has computed this on every review since the beginning,
+    put it in the report under "events", and nothing ever read it. A rival paid
+    the clause on one of ours and the run that watched it happen carried on as
+    though nothing had. Losing a player is the biggest thing that can happen
+    between two reviews — the money lands, a hole opens in the eleven, and every
+    plan made an hour ago was made for a different squad.
+
+    This runs BEFORE the phases that buy and sell, so the same review that
+    notices the loss is the one that answers it.
+    """
+    changes = report.get("events") or {}
+    line = memory.describe(changes)
+    if not line:
+        return {"changed": False}
+    entries = memory.record(changes, money_after=num(team.get("teamMoney")))
+    removed = list(changes.get("removed") or [])
+    events.emit("note" if not removed else "error",
+                f"Cambió la plantilla: {line}",
+                detail={"entraron": ", ".join(changes.get("added") or []) or "—",
+                        "salieron": ", ".join(removed) or "—",
+                        "caja": f"{int(num(team.get('teamMoney'))):,} €"},
+                status="error" if removed else "plan")
+    # A player leaving is worth a phone buzzing; one arriving is the bot doing
+    # what it was told to. The subject carries the names so two different losses
+    # are two different messages rather than one muted by the other.
+    if removed:
+        notify.send(f"squad_out:{'-'.join(sorted(removed))}",
+                    f"Perdí a {', '.join(removed)}. {line}", level="warn")
+    return {"changed": True, "line": line, "entries": entries,
+            "removed": removed, "added": list(changes.get("added") or [])}
 
 
 def _plan_bids(ctx, client, lid, team, report):
@@ -1442,6 +1478,9 @@ def run_review(ctx, force=False):
                 return False
             return True
 
+        # First, before anything is planned: did the squad change under us?
+        squad_change = _react_to_squad_changes(report, team)
+
         lineup_res = ({"status": "skipped", "reason": "autonomy off"}
                       if not (config.AUTO_EXECUTE and config.AUTO_LINEUP)
                       else _apply_best_lineup(ctx, client, lid, tid, team))
@@ -1517,7 +1556,7 @@ def run_review(ctx, force=False):
                       _summarize(report, lineup_res, bids_res, listings,
                                  clauses, shield, sources, gaps_res, skipped,
                                  think_seconds=think_seconds, catchup=catchup,
-                                 defense=defense))
+                                 defense=defense, squad_change=squad_change))
         store.put_doc("last_review_at", to_iso(now))
         events.emit("review", f"Revisión: caja {report['money']:,} €",
                     detail={"flips": len(report.get("flips") or []),
@@ -1593,7 +1632,8 @@ def _note_market_read(report):
 
 def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
                shield=None, sources=None, gaps_res=None, skipped_phases=None,
-               think_seconds=None, catchup=None, defense=None):
+               think_seconds=None, catchup=None, defense=None,
+               squad_change=None):
     """What the dashboard reads. Deliberately small: a full review payload is
     hundreds of KB of squad data and there is no reason to store it every hour."""
     lu = report.get("lineup") or {}
@@ -1633,6 +1673,8 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "defense": defense or {},
         "sources": sources or {},
         "skipped_phases": skipped_phases or [],
+        "squad_change": squad_change or {},
+        "ledger": memory.recent(12),
         # Next to the list of what was dropped, the two numbers that say why and
         # what happens about it: how long the analysis took before any of the
         # acting started, and when the re-run is due.

@@ -136,6 +136,22 @@ def _record_shape(week, payload):
 # carry a per-week breakdown is the one thing left to confirm, and the same
 # recorder answers it: `player_shape` banks the keys of one row so the next live
 # run says what is there, instead of another round of guessing from here.
+def raw_week(client, week_number):
+    """The gameweek payload as LaLiga sent it, cached.
+
+    `/stats/week/{n}` is the FIXTURE LIST — ten rows of {date, id, local,
+    localScore, matchState, visitor, visitorScore}. The player parser below
+    finds nothing in it, which is correct and is not the same as it being
+    useless: those rows are a results table, and sources.standings adds them up
+    into how well each club is actually playing. One fetch, cached once, read by
+    both.
+    """
+    def _fetch():
+        return client.week_stats(week_number)
+    return cache.cached(f"week_raw_{week_number}", CACHE_TTL, _fetch,
+                        default=None)
+
+
 def week(client, week_number):
     """One gameweek's stats, cached. {} when the shape is not recognised."""
     def _fetch():

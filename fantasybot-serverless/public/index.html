@@ -599,6 +599,9 @@ function render(d){
         +'<small>'+esc(o.pos||'?')+' · '+esc(o.via||'')+' · '+esc(o.verdict)
         +(o.expected_points!=null?' · '+esc(o.expected_points)+' pts/jornada':'')
         +(o.points_per_million!=null?' · '+esc(o.points_per_million)+' pts/M':'')
+        +(o.media_reciente!=null?' · últimas: '+esc((o.ultimas_jornadas||[]).join('-'))
+          +' (media '+esc(o.media_reciente)+')':'')
+        +(o.rival_texto?' · '+esc(o.rival_texto):'')
         +'</small></span>'
         +'<span class="num">'+esc(short(o.buy_price))+'</span></summary>'
         +'<ul>'+(o.reasons||[]).map(r=>'<li>'+esc(r)+'</li>').join('')

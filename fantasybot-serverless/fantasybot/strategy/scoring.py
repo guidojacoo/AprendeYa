@@ -189,7 +189,22 @@ def _money(n):
         return "?"
 
 
-def rank(ops, prob_index=None, money=None, limit=None, replacement=None):
+def _rival_text(difficulty):
+    """0 is the weakest club in the league, 1 the strongest."""
+    d = float(difficulty)
+    if d >= 0.75:
+        return "rival muy duro"
+    if d >= 0.55:
+        return "rival duro"
+    if d >= 0.35:
+        return "rival parejo"
+    if d >= 0.2:
+        return "rival accesible"
+    return "rival flojo"
+
+
+def rank(ops, prob_index=None, money=None, limit=None, replacement=None,
+         form_index=None, fixture_difficulty=None):
     """Score every listing, best first. Ties break on the cheaper one."""
     from ..matching import match_name
 
@@ -201,7 +216,21 @@ def rank(ops, prob_index=None, money=None, limit=None, replacement=None):
                                prob_index)
             if entry:
                 prob = entry.get("prob")
-        out.append(score(op, prob=prob, money=money,
-                         replacement=replacement))
+        row = score(op, prob=prob, money=money, replacement=replacement)
+        # The two signals the user asked to see working, carried per player so
+        # the page can show them instead of asserting they are in there.
+        hist = (form_index or {}).get(str(op.get("player_id")))
+        if hist:
+            pts = [h["points"] for h in hist if h.get("points") is not None]
+            if pts:
+                row["ultimas_jornadas"] = pts
+                row["media_reciente"] = round(sum(pts) / len(pts), 2)
+        team_id = op.get("team_id")
+        if fixture_difficulty and team_id is not None:
+            rival = (fixture_difficulty or {}).get(str(team_id))
+            if rival is not None:
+                row["rival"] = round(float(rival), 2)
+                row["rival_texto"] = _rival_text(rival)
+        out.append(row)
     out.sort(key=lambda r: (-r["score"], r.get("buy_price") or 0))
     return out[:limit] if limit else out
