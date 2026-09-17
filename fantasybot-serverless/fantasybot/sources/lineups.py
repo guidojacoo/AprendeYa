@@ -10,6 +10,8 @@ import sys
 from .. import config, net, cache
 from ..matching import normalize
 
+_MEMO = None
+
 CACHE_TTL = 1800  # 30 min: probable lineups update as news comes in
 
 
@@ -72,5 +74,26 @@ def probable_lineups(slugs=None):
     """
     if slugs is not None:
         return _build_index(slugs)
-    return cache.cached("probable_lineups", CACHE_TTL,
-                        lambda: _build_index(team_slugs()), default={})
+    # Memoised for the life of this process, on top of the TTL cache.
+    #
+    # The TTL cache stops the SCRAPE repeating; it does not stop the round trip
+    # to storage, and that round trip is a full second. `lineup.optimize` reads
+    # this index whenever a caller does not hand it one, and the upgrade engine
+    # re-solves the eleven once per player — so a single review was paying that
+    # second dozens of times over, and a whole-squad search was unusable
+    # entirely: ninety evaluations took a hundred and eight seconds, against a
+    # function that lives for fifty.
+    #
+    # A tick is a fresh process and the index cannot change inside one, so this
+    # is a cache with no staleness to it.
+    global _MEMO
+    if _MEMO is None:
+        _MEMO = cache.cached("probable_lineups", CACHE_TTL,
+                             lambda: _build_index(team_slugs()), default={})
+    return _MEMO
+
+
+def forget_memo():
+    """Drop the per-process memo. For tests, and for a long-lived CLI."""
+    global _MEMO
+    _MEMO = None

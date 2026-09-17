@@ -19,6 +19,7 @@ from .strategy import captain as captain_mod
 from .strategy import flip, needs as needs_mod, sell as sell_mod
 from .strategy import lineup as lineup_opt
 from .strategy import scoring
+from .strategy import depth
 from .strategy import upgrades
 from .strategy import shield as shield_mod
 from .sources.lineups import probable_lineups
@@ -434,6 +435,7 @@ def review(client, days_to_matchday=None):
     # act on; `market` is everything it looked at, scored, including what it
     # turned down — which is the half that used to be invisible and the half you
     # ask about when a player you wanted goes to somebody else.
+    raw_market = market
     ops = flip.opportunities(client, lid, owned=owned)
     # What the market actually held when we looked. "No analizó el mercado" and
     # "el mercado no tenía a nadie" are completely different statements and the
@@ -617,6 +619,16 @@ def review(client, days_to_matchday=None):
         # same currency — points per gameweek — is what stops the bot spending
         # money to defend a bench player it was about to list anyway.
         "points_at_risk": {r["player_team_id"]: r["loss"] for r in sell_costs},
+        # Eleven starters beat three stars, and that is a whole-squad question:
+        # what does the ELEVEN look like after this set of moves, rather than
+        # what does each signing add on its own. Selling one to buy two is a
+        # move nothing else here could even express.
+        "rebuild": depth.rebuild(
+            team, upgrade_list, upgrades.players_by_id(raw_market), sell_costs,
+            money=num(team["teamMoney"]), reserve=config.CASH_RESERVE,
+            prob_index=prob_index, fixture_difficulty=fixture_difficulty,
+            form_index=form_index),
+        "leaks": depth.leaks(best),
         "clause_targets": targets,
         # Whether the per-gameweek stats are actually parsing. A source that
         # returns {} looks exactly like a quiet week, forever.

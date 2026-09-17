@@ -50,3 +50,4 @@ def _no_network(*a, **kw):
 
 
 urllib.request.urlopen = _no_network
+

@@ -1715,6 +1715,10 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "market_census": report.get("market_census") or {},
         "upgrades": (report.get("upgrades") or [])[:10],
         "transfers": report.get("transfers") or [],
+        # The whole-squad moves: sell these, buy those, and what the eleven is
+        # worth afterwards. Capped because each one carries its own reasoning.
+        "rebuild": (report.get("rebuild") or [])[:3],
+        "leaks": (report.get("leaks") or [])[:6],
         "sells": (report.get("sells") or [])[:5],
         "clause_targets": (report.get("clause_targets") or [])[:5],
         "tasks": report.get("tasks") or [],

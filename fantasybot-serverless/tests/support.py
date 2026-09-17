@@ -39,6 +39,14 @@ class StorageTestCase(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        # The probable-lineup index is memoised for the life of the process (see
+        # sources.lineups): a review re-solves the eleven dozens of times and a
+        # storage round trip per solve cost a full second each. In a test
+        # process that memo outlives one test, so a test that builds an index
+        # would otherwise decide the answer for every test after it.
+        from fantasybot.sources import lineups as _lineups
+        _lineups.forget_memo()
+        self.addCleanup(_lineups.forget_memo)
         self.tmp = tempfile.mkdtemp(prefix="fantasybot-test-")
         self._saved_local = (local_mod.STATE_DIR, local_mod.CACHE_DIR,
                        local_mod.EVENTS_PATH, dict(local_mod._SPECIAL_PATHS))
