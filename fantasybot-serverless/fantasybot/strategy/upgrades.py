@@ -20,6 +20,7 @@ Cost: one lineup optimisation per candidate. It is pure arithmetic over a squad
 of twenty — no API calls, no scraping — so forty candidates cost milliseconds.
 """
 
+from .. import modes
 from ..matching import num, position_of
 from . import lineup as lineup_opt
 
@@ -27,6 +28,9 @@ from . import lineup as lineup_opt
 # per gameweek. Below it the difference is noise in the starting probabilities,
 # and acting on noise spends real money.
 MIN_GAIN = 0.25
+# The projected resale profit a purchase must show before "hacer caja" will make
+# it. Below this the spread does not cover being wrong about the trend.
+MIN_MARGIN_PCT = 5.0
 
 # How often a given starter misses a gameweek: injury, suspension, rotation, a
 # knock on the Friday. Roughly one week in seven across a season.
@@ -186,14 +190,35 @@ def rank(ops, team, cards=None, money=None, prob_index=None,
             "affordable": money is None or price <= int(num(money)),
             "pos": op.get("pos") or position_of(pm, "?"),
         })
-    out.sort(key=lambda r: (-r["gain_per_million"], -r["gain"],
-                            r.get("buy_price") or 0))
+    # What "best" means is the mode's call. Points per euro is the default and
+    # the right one for winning gameweeks; a trading posture ranks the same rows
+    # by the profit it expects to take out of them instead.
+    if modes.knob("rank_by") == "margin":
+        out.sort(key=lambda r: (-(r.get("margin_pct") or 0),
+                                -r["gain_per_million"],
+                                r.get("buy_price") or 0))
+    else:
+        out.sort(key=lambda r: (-r["gain_per_million"], -r["gain"],
+                                r.get("buy_price") or 0))
     return out[:limit] if limit else out
 
 
 def worth_signing(row):
-    """Whether a ranked candidate clears the bar for spending real money."""
-    return bool(row.get("affordable")) and row.get("gain", 0) >= MIN_GAIN
+    """Whether a ranked candidate clears the bar for spending real money.
+
+    The bar is the active mode's, not this module's constant. In "hacer caja"
+    the points bar is zero — which does NOT mean buy anyone: it means points are
+    no longer what is being tested, and the margin test below is. In "todo a
+    puntos" it drops, because a smaller edge is still an edge when points are
+    the only currency.
+    """
+    if not row.get("affordable"):
+        return False
+    if modes.knob("rank_by") == "margin":
+        # Trading: the purchase has to show a real projected profit. A player
+        # who adds nothing and gains nothing is not a trade, he is a donation.
+        return (row.get("margin_pct") or 0) >= MIN_MARGIN_PCT
+    return row.get("gain", 0) >= modes.knob("min_gain")
 
 
 def best_plan(ranked, money, reserve=0, max_signings=3):

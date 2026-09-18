@@ -209,6 +209,11 @@
         <div class="card"><h3>Última ejecución</h3><div class="big sm" id="last">—</div>
           <div class="note" id="last-note">—</div></div>
       </div>
+      <section><h2>Modo</h2>
+        <div class="note">Cómo juega. Cambiarlo dispara una revisión al toque,
+          así que lo que ves abajo se recalcula con el modo nuevo.</div>
+        <div id="modes"></div>
+        <span id="mode-note" class="note"></span></section>
       <section><h2>Alineación</h2><div id="lineup"></div></section>
       <section><h2>Estrategia</h2><div id="stance"></div></section>
       <section><h2>Tareas para vos</h2><div id="tasks"></div></section>
@@ -424,6 +429,35 @@ function render(d){
       +esc(cand.nombre)+'</b><small>'+esc(cand.reason||'')+'</small></div>'
       +'<div class="right">'+esc(short(cand.clause))+'</div></div>')
     :'<div class="empty">Ningún jugador tuyo está en riesgo ahora.</div>';
+
+  /* ---- modo ---- */
+  part('modo',()=>{
+    /* The knobs, not just the name. A posture you cannot inspect is a posture
+       you have to trust, and this one decides what the bot does with your
+       money — so the numbers that change are on screen next to the button that
+       changes them. */
+    const md2=rep.mode||null, cur=md2&&md2.mode;
+    const MODES=[
+      ['equilibrio','Equilibrado','Puntos por euro. Lo de siempre.'],
+      ['dinero','Hacer caja','Compra barato, vende caro. Los puntos, después.'],
+      ['puntos','Todo a puntos','Paga de más por el jugador y no vende titulares.']];
+    $('modes').innerHTML=MODES.map(([k,label,blurb])=>
+      '<div class="row"><span class="tag '+(k===cur?'ok':'idle')+'">'
+      +(k===cur?'ACTIVO':'—')+'</span><div class="m"><b>'+esc(label)+'</b>'
+      +'<small>'+esc(blurb)+'</small></div>'
+      +'<div class="right"><button data-mode="'+k+'"'+(k===cur?' disabled':'')
+      +'>'+(k===cur?'en uso':'activar')+'</button></div></div>').join('')
+      +(md2&&md2.knobs
+        ?'<div class="row"><div class="m"><small>'
+         +'Pide '+esc(md2.knobs.min_gain)+' pts/jornada para fichar · '
+         +'ordena por '+esc(md2.knobs.rank_by==='margin'?'margen de reventa':'puntos')
+         +' · paga hasta '+esc(Math.round((md2.knobs.bid_ceiling||1)*100))+'% del precio'
+         +' · una cláusula puede llevarse el '
+         +esc(Math.round((md2.knobs.clause_share||0)*100))+'% de la caja'
+         +(md2.knobs.flip_target?' · vende al +'
+            +esc(Math.round(md2.knobs.flip_target*100))+'% de lo que pagó':'')
+         +'</small></div></div>':'');
+  });
 
   /* ---- por qué no pujó ---- */
   part('por qué no pujó',()=>{
@@ -1041,6 +1075,22 @@ $('scan').onclick=async e=>{
   }catch(err){note.textContent='Error: '+err.message;}
   b.disabled=false; b.textContent='Analizar el mercado ahora';
 };
+
+/* Switching mode re-runs the review, so the page the user is looking at is
+   recomputed under the posture they just chose. Anything less and switching
+   looks like it did nothing. */
+$('modes').addEventListener('click',async e=>{
+  const b=e.target.closest('button[data-mode]'); if(!b)return;
+  const note=$('mode-note');
+  b.disabled=true; note.textContent='Cambiando y revisando…';
+  try{
+    const r=await call('/api/admin?action=mode&name='+encodeURIComponent(b.dataset.mode),
+                       {method:'POST'});
+    note.textContent='Modo: '+((r.active||{}).label||b.dataset.mode);
+    await call('/api/admin?action=review',{method:'POST'});
+    await load();
+  }catch(err){note.textContent='Error: '+err.message; b.disabled=false;}
+});
 
 $('run').onclick=async e=>{
   const b=e.currentTarget; b.disabled=true; b.textContent='Ejecutando…';

@@ -24,8 +24,9 @@ sixty seconds, and each evaluation re-solves the lineup.
 
 from itertools import combinations
 
+from .. import modes
 from ..matching import num
-from .upgrades import (MIN_GAIN, SALE_HAIRCUT, _as_squad_member, squad_points)
+from .upgrades import SALE_HAIRCUT, _as_squad_member, squad_points
 
 # How wide to search. Small on purpose: the candidates are already ranked by
 # points per euro, so the good combinations live near the top — and every
@@ -116,6 +117,7 @@ def rebuild(team, ranked, cards, sellable_rows, money=0, reserve=0,
     is not a bias towards churn, it is a search that happens to allow it.
     """
     spare = max(0, int(num(money)) - int(num(reserve)))
+    min_gain = modes.knob("min_gain")
     base = squad_points(team, prob_index, fixture_difficulty, form_index)
     # A price of zero is not a free footballer, it is a price we failed to read
     # — `num` turns a missing or malformed field into 0, and three of those
@@ -154,7 +156,7 @@ def rebuild(team, ranked, cards, sellable_rows, money=0, reserve=0,
                 # would read as zero and prune the whole search away in
                 # silence — the exact shape of failure this bot keeps finding.
                 if all(b.get("gain") is not None for b in pick):
-                    if sum(float(b["gain"]) for b in pick) - lost < MIN_GAIN:
+                    if sum(float(b["gain"]) for b in pick) - lost < min_gain:
                         continue
                 # A sale has to be NEEDED. The search happily attaches a
                 # harmless one to a purchase that was already affordable —
@@ -173,7 +175,7 @@ def rebuild(team, ranked, cards, sellable_rows, money=0, reserve=0,
                 gained = combo_gain(team, pms, gone, prob_index,
                                     fixture_difficulty, form_index, base=base)
                 net = round(gained - lost, 2)
-                if net < MIN_GAIN:
+                if net < min_gain:
                     continue
                 plans.append({
                     "net_gain": net,

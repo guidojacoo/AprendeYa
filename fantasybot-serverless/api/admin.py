@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fantasybot import notify, scheduler, selftest, state, tick  # noqa: E402
+from fantasybot import events, modes, notify, scheduler, selftest, state, tick  # noqa: E402
 from fantasybot.storage import get_storage, to_iso       # noqa: E402
 from fantasybot.serverless.http import body, guarded, query  # noqa: E402
 
@@ -74,6 +74,26 @@ def _dispatch(handler):
     if action == "pending":
         return 200, {"ok": True, "pending": store.pending_actions(limit=100),
                      "next_deadline": to_iso(scheduler.next_deadline())}
+
+    if action == "modes":
+        # Read: which mode is in force and what every mode would do. The page
+        # renders the knobs, so switching is a choice made with the numbers in
+        # front of you rather than a name you have to trust.
+        return 200, {"ok": True, "active": modes.describe(),
+                     "modes": modes.catalogue()}
+
+    if action == "mode":
+        try:
+            name = modes.set_mode(params.get("name") or params.get("mode"))
+        except ValueError as e:
+            return 400, {"ok": False, "error": str(e)}
+        # The mode changes what the next review decides, so run one now instead
+        # of leaving the user looking at a page still explaining the old
+        # posture. Switching and seeing nothing change is indistinguishable from
+        # the switch not working.
+        store.delete_doc("last_review_at")
+        events.emit("config", f"Modo cambiado a {name}", status="ok")
+        return 200, {"ok": True, "active": modes.describe()}
 
     if action == "settings":
         return 200, {"ok": True, "settings": store.get_settings()}

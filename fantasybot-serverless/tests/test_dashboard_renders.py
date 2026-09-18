@@ -77,6 +77,11 @@ class TheDashboardRenders(unittest.TestCase):
                           "scheduled": [{"market_id": "m1", "nombre": "A",
                                          "amount": 5_000_000}]}}})
 
+    def test_the_mode_picker_with_no_mode_in_the_report(self):
+        """An older tick's report carries no mode; the picker still draws."""
+        self._render({"ok": True, "now": "2026-09-18T10:00:00+00:00",
+                      "report": {"money": 1}})
+
     def test_a_full_report(self):
         """Every section with something in it."""
         self._render({
@@ -93,6 +98,12 @@ class TheDashboardRenders(unittest.TestCase):
                        "declined": [], "skipped": []},
             "report": {
                 "money": 44_000_000, "xi_points": 51.2,
+                "mode": {"mode": "dinero", "label": "Hacer caja",
+                         "blurb": "b",
+                         "knobs": {"min_gain": 0.0, "rank_by": "margin",
+                                   "xi_premium": 1.0, "bench_premium": 0.5,
+                                   "flip_target": 0.25, "bid_ceiling": 0.95,
+                                   "clause_share": 0.30}},
                 "market_census": {"total": 12, "system": 8},
                 "market": [{"nombre": "A", "score": 70, "verdict": "comprar",
                             "headline": "h", "reasons": ["r"],

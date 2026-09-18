@@ -25,7 +25,7 @@ import traceback
 from datetime import date, timedelta
 
 from . import agent as agent_mod
-from . import bidding, config, events, explain, net, notify, scheduler
+from . import bidding, config, events, explain, modes, net, notify, scheduler
 from . import execute as execute_mod
 from . import state
 from .scheduler import (BID, LINEUP, LLM_STRATEGY, REMINDER, REVIEW,
@@ -750,10 +750,11 @@ def _plan_bids(ctx, client, lid, team, report):
         "no me alcanza": sum(1 for r in candidates if not r.get("affordable")),
         "suman muy poco": sum(1 for r in candidates
                               if r.get("affordable")
-                              and (r.get("gain") or 0) < upgrades_mod.MIN_GAIN),
+                              and (r.get("gain") or 0) < modes.knob("min_gain")),
         "valen la pena": len(ranked),
         "mejor gana": max((r.get("gain") or 0 for r in candidates), default=0),
-        "hace falta ganar": upgrades_mod.MIN_GAIN,
+        "hace falta ganar": modes.knob("min_gain"),
+        "modo": modes.active(),
     }
     if ranked:
         plan = [{"market_id": r["market_id"], "nombre": r.get("nombre"),
@@ -809,8 +810,14 @@ def _plan_bids(ctx, client, lid, team, report):
         # contested, and outbidding money nobody has is money that does not buy
         # the next player. So the price is the bid, and the field caps the roof.
         price = int(num(b["amount"]))
-        ceiling = bidding.cap_against_rivals(
-            round(price * (1 + bidding.VALUE_DRIFT)), price, reach)
+        # How far above the asking price we are willing to chase is the mode's
+        # call, and it is the honest place for "risk": losing an auction by a
+        # hundred thousand costs the whole player, while overpaying for a trade
+        # costs exactly the profit. The rival cap still applies on top — paying
+        # over money nobody in the league has is never the aggressive move, just
+        # the expensive one.
+        roof = round(price * (1 + bidding.VALUE_DRIFT) * modes.knob("bid_ceiling"))
+        ceiling = bidding.cap_against_rivals(max(price, roof), price, reach)
         try:
             row = scheduler.schedule_bid(lid, mid, price, close_at,
                                          nombre=b.get("nombre"),
@@ -821,7 +828,7 @@ def _plan_bids(ctx, client, lid, team, report):
             continue
         state.complete_by_key(f"sell:{(by_id.get(mid) or {}).get('player_id')}")
         why = explain.bid(by_id.get(mid) or {"nombre": b.get("nombre")},
-                          price, reach if ceiling < round(price * (1 + bidding.VALUE_DRIFT))
+                          price, reach if ceiling < roof
                           else None)
         scheduled.append({"market_id": mid, "nombre": b.get("nombre"),
                           "max_bid": price, "ceiling": ceiling,
@@ -980,8 +987,13 @@ def _plan_clauses(ctx, lid, team, report):
     # The fence that does not go stale. One player may never take more than this
     # share of the balance: a clause big enough to leave us unable to answer the
     # next one has cost us two players, not bought one.
-    if 0 < config.MAX_CLAUSE_SHARE < 1:
-        spendable = min(spendable, int(money * config.MAX_CLAUSE_SHARE))
+    # The mode decides how much of the bank one player may take. "Todo a
+    # puntos" lets an extraordinary signing be most of it; "hacer caja" barely
+    # uses clauses at all, because a ~1.67x premium is a terrible entry price
+    # for a trade. Never wider than the configured ceiling either way.
+    share = min(config.MAX_CLAUSE_SHARE, modes.knob("clause_share"))
+    if 0 < share < 1:
+        spendable = min(spendable, int(money * share))
 
     queued, skipped = [], []
     for t in targets:
@@ -992,7 +1004,7 @@ def _plan_clauses(ctx, lid, team, report):
         # paying one for a player who barely improves the eleven is the most
         # expensive way there is to stand still.
         gain = t.get("gain")
-        if gain is not None and gain < upgrades_mod.MIN_GAIN:
+        if gain is not None and gain < modes.knob("min_gain"):
             skipped.append({**_target_brief(t),
                             "why": f"solo suma {gain} pts/jornada, no paga "
                                    f"la prima de la cláusula"})
@@ -1417,6 +1429,26 @@ def _expected_points(team, report):
     return out
 
 
+def _paid_by_id(lid, team):
+    """What we paid for each player we still hold, keyed by playerMaster id.
+
+    Only a profit-taking mode needs this, so every other mode pays nothing for
+    it — the activity feed is already in storage, but walking it is work, and
+    this runs inside the listing phase's slice of a sixty-second budget.
+
+    Failing is fine and returns {}. Without an entry price a holding is simply
+    priced on its merits, which is what every mode did before this existed.
+    """
+    if not modes.knob("flip_target"):
+        return {}
+    try:
+        from .strategy import history as history_mod
+        mid = team.get("managerId") or (team.get("manager") or {}).get("id")
+        return history_mod.paid_for_squad(state.load_activity_history(lid), mid)
+    except Exception:
+        return {}
+
+
 def _store_reserves(client, lid, team, best, sells, report=None):
     """Work out what each player is worth to us, and write it down.
 
@@ -1435,19 +1467,25 @@ def _store_reserves(client, lid, team, best, sells, report=None):
     market = client.market(lid)
     days = _days_listed(store, team, market)
     expected = _expected_points(team, report)
+    # The offer handler reads this map on every tick. It has to agree with what
+    # the listing phase asks for, or the bot lists a holding at its profit-taking
+    # price and then judges the offer that meets it against the old premium —
+    # refusing the very sale it advertised.
+    paid = _paid_by_id(lid, team)
     reserves = offers_mod.reserve_map(team, best, sells, listed_since=days,
-                                      expected=expected)
+                                      expected=expected, paid_by_id=paid)
     store.put_doc("reserves", reserves)
-    return market, days, expected
+    return market, days, expected, paid
 
 
 def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None,
-                   expected=None):
+                   expected=None, paid=None):
     """Queue a listing for every squad player not already on the market."""
     from .strategy import offers as offers_mod
 
     if market is None:
-        market, days, expected = _store_reserves(client, lid, team, best, sells)
+        market, days, expected, paid = _store_reserves(client, lid, team, best,
+                                                       sells)
     # AUTO_EXECUTE is the master switch, and this phase was the one that did not
     # ask. Observe-only mode meant "touch nothing", and listing the whole squad
     # is touching something: it puts every player of yours in front of the league
@@ -1459,10 +1497,11 @@ def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None,
                          else "observe-only"),
                 "listed": [], "would_list": offers_mod.plan_listings(
                     team, market, best, sells, listed_since=days,
-                    expected=expected)}
+                    expected=expected, paid_by_id=paid)}
 
     planned = offers_mod.plan_listings(team, market, best, sells,
-                                       listed_since=days, expected=expected)
+                                       listed_since=days, expected=expected,
+                                       paid_by_id=paid)
     # Why the others were left out. "Listed 0" over a squad of fifteen with none
     # on the market is a silent refusal, and a silent refusal is indistinguishable
     # from a switch being off — which cost a day of guessing between the two.
@@ -1558,10 +1597,10 @@ def run_review(ctx, force=False):
         # Always, before anything that can be dropped for time: these are what
         # every tick uses to answer an offer.
         try:
-            market, days_listed, expected_pts = _store_reserves(
+            market, days_listed, expected_pts, paid_for = _store_reserves(
                 client, lid, team, best, report.get("sells"), report)
         except Exception as e:                   # noqa: BLE001
-            market, days_listed, expected_pts = None, None, None
+            market, days_listed, expected_pts, paid_for = None, None, None, None
             skipped.append(f"reserves ({e})")
         # Listing comes BEFORE the phases that spend. It is the one that brings
         # money in, it is the cheapest of them, and it is the one that had never
@@ -1569,7 +1608,7 @@ def run_review(ctx, force=False):
         # dropping the phase that sells. Selling first also funds the buying.
         listings = (_plan_listings(ctx, client, lid, team, best,
                                    report.get("sells"), market, days_listed,
-                                   expected=expected_pts)
+                                   expected=expected_pts, paid=paid_for)
                     if _afford("listings", 8) else {"mode": "out of time"})
         # Before planning anything new, retire what the rules no longer allow.
         offside = _cancel_offside_bids(client, lid, log=ctx.log)
@@ -1698,6 +1737,9 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "formation": lu.get("formation"),
         # Now that the XI is built from expected points, its total is a number
         # that means something on its own: what the eleven should score.
+        # Which posture every decision below was taken under. Without it the
+        # page explains WHAT the bot did and never why it was willing to.
+        "mode": modes.describe(),
         "xi_points": lu.get("total"),
         "lineup_changed": bool(lu.get("changed")),
         "lineup_result": lineup_res,

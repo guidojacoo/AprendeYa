@@ -258,3 +258,57 @@ def analyze_league_trading_history(
         "tracked_to": newest_ts[:10] if newest_ts else None,
         "managers": results,
     }
+
+
+def paid_for_squad(activity_history, manager_id):
+    """What we actually paid for each player we still hold: {player_id: amount}.
+
+    The entry price of every open position, read off LaLiga's own activity feed
+    rather than stored by this bot — which means it survives a lost database, a
+    redeploy, and a player bought before any of this code existed.
+
+    FIFO, the same way `compute_manager_trading_history` matches lots, so the two
+    never disagree about what a holding cost. This is the cheap slice of that
+    function: no P&L, no ROI, no date arithmetic, because the listing phase runs
+    inside a sixty-second budget and only needs the one number.
+
+    A player bought twice and sold once reports the price of the lot still open.
+    A player never bought — he came with the squad — is absent, not zero: we have
+    no entry price for him, and pretending it was zero would mark him as
+    infinitely profitable and sell him the moment any profit-taking mode is on.
+    """
+    try:
+        manager_id = int(manager_id)
+    except (TypeError, ValueError):
+        return {}
+
+    events = []
+    for a in activity_history or []:
+        pid = a.get("playerMasterId")
+        if pid is None:
+            continue
+        atype = a.get("activityTypeId")
+        try:
+            u1 = int(a["user1Id"]) if a.get("user1Id") is not None else None
+            u2 = int(a["user2Id"]) if a.get("user2Id") is not None else None
+        except (ValueError, TypeError):
+            continue
+        action = None
+        if atype in (TYPE_MARKET_BUY, TYPE_DIRECT_TRANSFER) and u1 == manager_id:
+            action = "BUY"
+        elif atype == TYPE_MARKET_SELL and u1 == manager_id:
+            action = "SELL"
+        elif atype == TYPE_DIRECT_TRANSFER and u2 == manager_id:
+            action = "SELL"
+        if action:
+            events.append((str(a.get("createdAt") or ""), action, str(pid),
+                           a.get("amount") or 0))
+    events.sort(key=lambda e: e[0])
+
+    lots: dict = defaultdict(list)
+    for _, action, pid, amount in events:
+        if action == "BUY":
+            lots[pid].append(amount)
+        elif lots[pid]:
+            lots[pid].pop(0)
+    return {pid: amounts[0] for pid, amounts in lots.items() if amounts}

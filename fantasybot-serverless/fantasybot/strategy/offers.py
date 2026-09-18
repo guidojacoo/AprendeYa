@@ -24,6 +24,7 @@ clock, no API calls — so the thresholds can be tested exhaustively, which matt
 for code that decides when to part with a player.
 """
 
+from .. import modes
 from ..matching import num
 from .lineup import payload_ids
 
@@ -85,13 +86,20 @@ def premium_for(player, xi_ids, sell_ids, expected=None):
     `expected` maps playerTeamId to his expected points per gameweek. Without it
     everything behaves as before; with it, a player who does not play is priced
     to actually leave instead of sitting at a premium nobody will pay.
+
+    The active mode scales the result, and scales the eleven separately from
+    everyone else. That separation is the whole point: "move the stock I do not
+    field" and "sell the man who starts every week" are different instructions,
+    and a single knob for both would quietly mean the second. So "hacer caja"
+    discounts the bench to turn it over and leaves the eleven exactly where it
+    was, while "todo a puntos" makes a starter effectively unbuyable.
     """
     pm = player.get("playerMaster") or {}
     ptid = str(player.get("playerTeamId") or pm.get("id"))
     if _is_out_of_league(player):
         return DUMP_DISCOUNT
     if ptid in {str(i) for i in xi_ids}:
-        return XI_PREMIUM
+        return XI_PREMIUM * modes.knob("xi_premium")
     # Checked BEFORE the sell list and before the squad default: a man who does
     # not play is the clearest sell there is, whether or not an advisor flagged
     # him, and he is certainly not worth a premium.
@@ -101,7 +109,7 @@ def premium_for(player, xi_ids, sell_ids, expected=None):
             return BENCH_DISCOUNT
     if str(pm.get("id")) in {str(i) for i in sell_ids}:
         return SELLABLE_PREMIUM
-    return SQUAD_PREMIUM
+    return SQUAD_PREMIUM * modes.knob("bench_premium")
 
 
 def decayed_premium(premium, days_listed):
@@ -117,11 +125,40 @@ def decayed_premium(premium, days_listed):
     return max(0.0, premium - premium * PREMIUM_DECAY_PER_DAY * stale_days)
 
 
-def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None):
+def take_profit(player, xi_ids, paid):
+    """Whether this holding has run far enough to cash in.
+
+    The trade the points engine cannot express: bought at ten, worth fifteen,
+    sell. `paid` is what we actually paid, read off LaLiga's own activity feed —
+    not a number this bot stores and could get wrong.
+
+    Never a starter. A player who appreciated is still a player who plays, and
+    selling the eleven to bank a paper gain is how a trading mode relegates you.
+    In practice a mode that buys for margin parks those players on the bench
+    anyway, so this costs the strategy nothing.
+    """
+    target = modes.knob("flip_target")
+    if not target or not paid:
+        return False
+    pm = player.get("playerMaster") or {}
+    ptid = str(player.get("playerTeamId") or pm.get("id"))
+    if ptid in {str(i) for i in xi_ids}:
+        return False
+    value = _market_value(player)
+    return bool(value) and value >= num(paid) * (1 + target)
+
+
+def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None,
+                  paid=None):
     """The least we would accept — and therefore what we list him at."""
     value = _market_value(player)
     if not value:
         return 0
+    # A holding that hit its target is priced to LEAVE, at market, with no
+    # premium on top. The decision was "take the profit"; haggling over the last
+    # few per cent is how a taken profit turns back into a holding.
+    if take_profit(player, xi_ids, paid):
+        return max(0, round(value))
     premium = decayed_premium(
         premium_for(player, xi_ids, sell_ids, expected), days_listed)
     return max(0, round(value * (1 + premium)))
@@ -145,7 +182,7 @@ def _listed_player_ids(market):
 
 
 def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRICE,
-                  listed_since=None, expected=None):
+                  listed_since=None, expected=None, paid_by_id=None):
     """Squad players that should be put on the market, and at what price.
 
     Everyone not already listed goes up, each at his own reserve. Starters
@@ -163,8 +200,9 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
         if pid in already:
             continue
         days = (listed_since or {}).get(pid, 0)
+        paid = (paid_by_id or {}).get(pid)
         price = reserve_price(p, xi_ids, sell_ids, days_listed=days,
-                              expected=expected)
+                              expected=expected, paid=paid)
         if price < min_price:
             continue      # not worth a listing slot
         out.append({
@@ -179,6 +217,11 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
             "expected_points": (expected or {}).get(
                 str(p.get("playerTeamId") or pm.get("id"))),
             "days_listed": days,
+            # What we paid, and whether this listing is a profit being taken.
+            # On the page this is the difference between "lo vendo porque no me
+            # sirve" and "lo vendo porque ya ganó lo que tenía que ganar".
+            "paid": int(num(paid)) if paid else None,
+            "taking_profit": take_profit(p, xi_ids, paid),
             "in_xi": str(p.get("playerTeamId") or pm.get("id")) in
                      {str(i) for i in xi_ids},
         })
@@ -216,7 +259,7 @@ def _offers_on(row):
 
 
 def reserve_map(team, best=None, sells=None, listed_since=None,
-                expected=None):
+                expected=None, paid_by_id=None):
     """{playerMaster id: reserve price} for the whole squad.
 
     Computed once per review and cached, because working it out needs the optimal
@@ -232,7 +275,7 @@ def reserve_map(team, best=None, sells=None, listed_since=None,
             out[str(pid)] = reserve_price(
                 p, xi_ids, sell_ids,
                 days_listed=(listed_since or {}).get(str(pid), 0),
-                expected=expected)
+                expected=expected, paid=(paid_by_id or {}).get(str(pid)))
     return out
 
 

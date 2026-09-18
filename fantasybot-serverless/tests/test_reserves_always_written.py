@@ -41,14 +41,14 @@ class ReservesAreWrittenBeforeAnythingCanBeDropped(StorageTestCase):
     def test_listing_reuses_the_market_read_instead_of_repeating_it(self):
         """One request per review, not two: the review is racing a 60s ceiling."""
         client = _Client()
-        market, days, expected = tick._store_reserves(
+        market, days, expected, paid = tick._store_reserves(
             client, "L1", _team(), None, [])
         ctx = mock.Mock(dry_run=False)
         saved = config.AUTO_LIST
         config.AUTO_LIST = False
         try:
             tick._plan_listings(ctx, client, "L1", _team(), None, [],
-                                market, days, expected=expected)
+                                market, days, expected=expected, paid=paid)
         finally:
             config.AUTO_LIST = saved
         self.assertEqual(client.market_calls, 1)
