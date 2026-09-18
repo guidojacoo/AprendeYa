@@ -346,6 +346,15 @@ function list(el,items,render,emptyText){
 /* ---------- render ---------- */
 function render(d){
   data=d;
+  /* Every section below renders independently. They used to run as one
+     straight-line block, so the FIRST thing that threw — a typo, a field the
+     API stopped sending — took every section after it down with it and left a
+     blank page saying only "Error: ...". That is the worst possible failure for
+     a page whose whole job is to explain what the bot is doing. Now a section
+     that throws is reported as broken and the other fifteen still draw. */
+  const broken=[];
+  const part=(label,fn)=>{try{fn();}catch(err){broken.push({part:label,err:err});
+    console.error('section failed:',label,err);}};
   const last=d.last_execution||{}, rep=d.report||{}, s=last.summary||{};
   const failed=last.status==='failed'||s.ok===false;
   const stale=last.started_at&&(Date.now()-new Date(last.started_at).getTime())>25*60*1000;
@@ -416,457 +425,503 @@ function render(d){
       +'<div class="right">'+esc(short(cand.clause))+'</div></div>')
     :'<div class="empty">Ningún jugador tuyo está en riesgo ahora.</div>';
 
-  /* ---- partes que la base no pudo servir ---- */
-  const deg=d.degraded||[];
-  const degBox=$('degraded');
-  if(degBox){
-    degBox.innerHTML=deg.length
-      ?('<div class="row"><span class="tag warn">'+deg.length+'</span><div class="m">'
-        +'La base tardó de más y estas partes no llegaron: '
-        +esc(deg.map(x=>x.part).join(', '))
-        +'<small>El bot sigue trabajando; se reintenta en el próximo minuto.</small>'
-        +'</div></div>'):'';
-    degBox.style.display=deg.length?'':'none';
-  }
-
   /* ---- por qué no pujó ---- */
-  const bf=(rep.bids||{}).funnel||null, nsched=((rep.bids||{}).scheduled||[]).length;
-  $('bidfunnel').innerHTML=!bf
-    ?'<div class="empty">Sin datos de la última revisión.</div>'
-    :(nsched
-        ?'<div class="row"><span class="tag ok">'+nsched+'</span><div class="m">'
-         +'pujas programadas para el cierre</div></div>'
-        :'<div class="row"><span class="tag warn">0</span><div class="m">'
-         +'No programó ninguna puja'+((rep.bids||{}).budget
-            ?' con '+short(rep.bids.budget)+' en caja':'')
-         +(bfClause?'<small>'+esc(bfClause)+' de los candidatos son de '
-           +'otros managers: esos se fichan por cláusula, no pujando.'
-           +'</small>':'')+'</div></div>')
-      +Object.entries(bf).map(([k,v])=>
-        '<div class="row"><div class="m">'+esc(k)+'</div>'
-        +'<div class="right"><span class="num">'
-        +esc(typeof v==='number'&&v<100?v:short(v))+'</span></div></div>').join('')
-      +((rep.bids||{}).skipped||[]).map(x=>
-        '<div class="row"><span class="tag idle">saltada</span><div class="m">'
-        +esc(x.nombre||x.market_id||'')+'<small>'+esc(x.reason||'')
-        +'</small></div></div>').join('');
+  part('por qué no pujó',()=>{
+    const bf=(rep.bids||{}).funnel||null, nsched=((rep.bids||{}).scheduled||[]).length;
+    /* How many of the candidates were rival-owned, i.e. clause-only. Named
+       after the funnel key it reads, because the key IS the label the page
+       prints below — if one is renamed the other has to move with it. */
+    const bfClause=bf?(bf['de otros managers (van por cláusula)']||0):0;
+    $('bidfunnel').innerHTML=!bf
+      ?'<div class="empty">Sin datos de la última revisión.</div>'
+      :(nsched
+          ?'<div class="row"><span class="tag ok">'+nsched+'</span><div class="m">'
+           +'pujas programadas para el cierre</div></div>'
+          :'<div class="row"><span class="tag warn">0</span><div class="m">'
+           +'No programó ninguna puja'+((rep.bids||{}).budget
+              ?' con '+short(rep.bids.budget)+' en caja':'')
+           +(bfClause?'<small>'+esc(bfClause)+' de los candidatos son de '
+             +'otros managers: esos se fichan por cláusula, no pujando.'
+             +'</small>':'')+'</div></div>')
+        +Object.entries(bf).map(([k,v])=>
+          '<div class="row"><div class="m">'+esc(k)+'</div>'
+          +'<div class="right"><span class="num">'
+          +esc(typeof v==='number'&&v<100?v:short(v))+'</span></div></div>').join('')
+        +((rep.bids||{}).skipped||[]).map(x=>
+          '<div class="row"><span class="tag idle">saltada</span><div class="m">'
+          +esc(x.nombre||x.market_id||'')+'<small>'+esc(x.reason||'')
+          +'</small></div></div>').join('');
+  });
 
   /* ---- quién te pueden robar (cláusulas) ---- */
-  const df=rep.defense||{}, exp=df.exposed||[], raised=df.raises||[];
-  const raisedBy={}; raised.forEach(r=>raisedBy[r.player_team_id]=r);
-  $('defense').innerHTML=exp.length
-    ?('<div class="row"><div class="m">Caja del rival más rico'
-      +'<small>cualquier cláusula por debajo de esto es alcanzable</small></div>'
-      +'<div class="right"><span class="num">'+esc(short(df.rival_reach||0))
-      +'</span></div></div>'
-      +(df.mode==='probe'
-        ?'<div class="row"><span class="tag warn">midiendo</span><div class="m">'
-         +'Todavía no sé cuánto cuesta subir una cláusula. Hago una subida chica '
-         +'para medirlo y después defiendo en serio.</div></div>':'')
-      +(df.mode==='waiting'
-        ?'<div class="row"><span class="tag idle">esperando</span><div class="m">'
-         +esc(df.why||'')+'</div></div>':'')
-      +exp.map(r=>{
-        const up=raisedBy[r.player_team_id];
-        return '<div class="row"><span class="tag '+(up?'ok':'warn')+'">'
-          +(up?'subida a '+short(up.target):'expuesto')+'</span>'
-          +'<div class="m"><b>'+esc(r.nombre)+'</b> <span class="k">'+esc(r.pos)+'</span>'
-          +'<small>cláusula '+esc(short(r.clause))+' · pierdo '
-          +esc(r.points_at_risk)+' pts/jornada si me lo llevan'
-          +(up&&up.cost?' · cuesta '+short(up.cost):'')+'</small></div>'
-          +'<div class="right">'+esc(short(r.value))+'</div></div>';
-      }).join(''))
-    :'<div class="empty">Ninguna cláusula tuya está al alcance de la liga.</div>';
+  part('quién te pueden robar (cláusulas)',()=>{
+    const df=rep.defense||{}, exp=df.exposed||[], raised=df.raises||[];
+    const raisedBy={}; raised.forEach(r=>raisedBy[r.player_team_id]=r);
+    $('defense').innerHTML=exp.length
+      ?('<div class="row"><div class="m">Caja del rival más rico'
+        +'<small>cualquier cláusula por debajo de esto es alcanzable</small></div>'
+        +'<div class="right"><span class="num">'+esc(short(df.rival_reach||0))
+        +'</span></div></div>'
+        +(df.mode==='probe'
+          ?'<div class="row"><span class="tag warn">midiendo</span><div class="m">'
+           +'Todavía no sé cuánto cuesta subir una cláusula. Hago una subida chica '
+           +'para medirlo y después defiendo en serio.</div></div>':'')
+        +(df.mode==='waiting'
+          ?'<div class="row"><span class="tag idle">esperando</span><div class="m">'
+           +esc(df.why||'')+'</div></div>':'')
+        +exp.map(r=>{
+          const up=raisedBy[r.player_team_id];
+          return '<div class="row"><span class="tag '+(up?'ok':'warn')+'">'
+            +(up?'subida a '+short(up.target):'expuesto')+'</span>'
+            +'<div class="m"><b>'+esc(r.nombre)+'</b> <span class="k">'+esc(r.pos)+'</span>'
+            +'<small>cláusula '+esc(short(r.clause))+' · pierdo '
+            +esc(r.points_at_risk)+' pts/jornada si me lo llevan'
+            +(up&&up.cost?' · cuesta '+short(up.cost):'')+'</small></div>'
+            +'<div class="right">'+esc(short(r.value))+'</div></div>';
+        }).join(''))
+      :'<div class="empty">Ninguna cláusula tuya está al alcance de la liga.</div>';
 
-  list($('tasks'),rep.tasks,t=>
-    '<div class="row"><div class="k">#'+esc(t.id)+'</div><div class="m">'+esc(t.text)
-    +(t.due?'<small>antes de '+esc(when(t.due,true))+'</small>':'')+'</div></div>',
-    'Nada pendiente de tu parte.');
+    list($('tasks'),rep.tasks,t=>
+      '<div class="row"><div class="k">#'+esc(t.id)+'</div><div class="m">'+esc(t.text)
+      +(t.due?'<small>antes de '+esc(when(t.due,true))+'</small>':'')+'</div></div>',
+      'Nada pendiente de tu parte.');
+  });
 
   /* ---- por qué ---- */
-  const why=[];
-  const push=(kind,cls,item)=>{if(item&&item.why)why.push([kind,cls,item]);};
-  (((rep.gap_signings||{}).queued)||[]).forEach(x=>push('FICHA','warn',x));
-  (((rep.clauses||{}).queued)||[]).forEach(x=>push('CLÁUSULA','warn',x));
-  (((rep.bids||{}).scheduled)||[]).forEach(x=>push('PUJA','idle',x));
-  [...((d.offers||{}).accepted||[]),...((d.offers||{}).declined||[])]
-    .forEach(x=>push(x.action==='accept'?'VENDE':'RECHAZA',
-                     x.action==='accept'?'ok':'bad',x));
-  push('BLINDA','ok',(rep.shield||{}).queued);
-  push('ONCE','idle',rep.lineup_result);
-  (((rep.listings||{}).listed)||[]).slice(0,6).forEach(x=>push('VENTA','idle',x));
-  /* Lo que MIRÓ y descartó. Sin esto la página solo cuenta la mitad: la que
-     salió bien. La pregunta que uno hace es por el jugador que se le escapó. */
-  (((rep.bids||{}).skipped)||[]).forEach(x=>why.push(['NO PUJA','bad',
-    {why:(x.nombre||x.market_id)+': '+x.reason}]));
-  (((rep.gap_signings||{}).skipped)||[]).forEach(x=>why.push(['NO FICHA','bad',
-    {why:'Hueco en '+x.pos+': '+x.why}]));
-  (((rep.clauses||{}).skipped)||[]).forEach(x=>why.push(['NO PAGA','bad',
-    {why:(x.nombre||'')+': '+(x.why||x.reason||'')}]));
-  (rep.market||[]).filter(o=>o.verdict==='no vale la pena'||o.verdict==='no alcanza')
-    .slice(0,4).forEach(o=>why.push(['DESCARTA','bad',
-      {why:o.nombre+' ('+o.score+'/100): '
-        +(o.headline||(o.reasons||[])[0]||'')}]));
-  list($('why'),why,([kind,cls,item])=>
-    '<div class="row"><span class="tag '+cls+'">'+esc(kind)+'</span>'
-    +'<div class="m">'+esc(item.why)+'</div></div>',
-    'Todavía no tomó ninguna decisión — esperá a la primera revisión.');
+  part('por qué',()=>{
+    const why=[];
+    const push=(kind,cls,item)=>{if(item&&item.why)why.push([kind,cls,item]);};
+    (((rep.gap_signings||{}).queued)||[]).forEach(x=>push('FICHA','warn',x));
+    (((rep.clauses||{}).queued)||[]).forEach(x=>push('CLÁUSULA','warn',x));
+    (((rep.bids||{}).scheduled)||[]).forEach(x=>push('PUJA','idle',x));
+    [...((d.offers||{}).accepted||[]),...((d.offers||{}).declined||[])]
+      .forEach(x=>push(x.action==='accept'?'VENDE':'RECHAZA',
+                       x.action==='accept'?'ok':'bad',x));
+    push('BLINDA','ok',(rep.shield||{}).queued);
+    push('ONCE','idle',rep.lineup_result);
+    (((rep.listings||{}).listed)||[]).slice(0,6).forEach(x=>push('VENTA','idle',x));
+    /* Lo que MIRÓ y descartó. Sin esto la página solo cuenta la mitad: la que
+       salió bien. La pregunta que uno hace es por el jugador que se le escapó. */
+    (((rep.bids||{}).skipped)||[]).forEach(x=>why.push(['NO PUJA','bad',
+      {why:(x.nombre||x.market_id)+': '+x.reason}]));
+    (((rep.gap_signings||{}).skipped)||[]).forEach(x=>why.push(['NO FICHA','bad',
+      {why:'Hueco en '+x.pos+': '+x.why}]));
+    (((rep.clauses||{}).skipped)||[]).forEach(x=>why.push(['NO PAGA','bad',
+      {why:(x.nombre||'')+': '+(x.why||x.reason||'')}]));
+    (rep.market||[]).filter(o=>o.verdict==='no vale la pena'||o.verdict==='no alcanza')
+      .slice(0,4).forEach(o=>why.push(['DESCARTA','bad',
+        {why:o.nombre+' ('+o.score+'/100): '
+          +(o.headline||(o.reasons||[])[0]||'')}]));
+    list($('why'),why,([kind,cls,item])=>
+      '<div class="row"><span class="tag '+cls+'">'+esc(kind)+'</span>'
+      +'<div class="m">'+esc(item.why)+'</div></div>',
+      'Todavía no tomó ninguna decisión — esperá a la primera revisión.');
+  });
 
   /* ---- mercado ---- */
-  const off=d.offers||{};
-  const rows=[...(off.accepted||[]).map(o=>[o,'ok','VENDIDO']),
-              ...(off.declined||[]).map(o=>[o,'bad','rechazada']),
-              ...(off.skipped||[]).map(o=>[o,'warn','en espera'])];
-  list($('offers'),rows,([o,cls,label])=>
-    '<div class="row"><span class="tag '+cls+'">'+label+'</span><div class="m"><b>'
-    +esc(o.nombre)+'</b><small>'+esc(o.reason||'')+(o.in_xi?' · titular':'')
-    +'</small></div><div class="right">'+esc(short(o.amount))+'</div></div>',
-    off.status==='skipped'?('Sin evaluar: '+esc(off.reason||'')):'Nadie ofertó todavía.');
-  $('c-mercado').textContent=rows.length?rows.length:'';
+  part('mercado',()=>{
+    const off=d.offers||{};
+    const rows=[...(off.accepted||[]).map(o=>[o,'ok','VENDIDO']),
+                ...(off.declined||[]).map(o=>[o,'bad','rechazada']),
+                ...(off.skipped||[]).map(o=>[o,'warn','en espera'])];
+    list($('offers'),rows,([o,cls,label])=>
+      '<div class="row"><span class="tag '+cls+'">'+label+'</span><div class="m"><b>'
+      +esc(o.nombre)+'</b><small>'+esc(o.reason||'')+(o.in_xi?' · titular':'')
+      +'</small></div><div class="right">'+esc(short(o.amount))+'</div></div>',
+      off.status==='skipped'?('Sin evaluar: '+esc(off.reason||'')):'Nadie ofertó todavía.');
+    $('c-mercado').textContent=rows.length?rows.length:'';
 
-  /* Lo que la revisión no llegó a hacer. Antes solo quedaba en un evento, que
-     se va hacia abajo; "no listó a nadie" necesita un motivo que siga ahí. */
-  const sk=rep.skipped_phases||[];
-  const PHASE={listings:'poner la plantilla en venta',clauses:'cláusulas',
-    gap_signings:'fichajes para huecos',bids:'pujas',shield:'blindaje',
-    matchday:'alineación de jornada',sources:'fuentes externas',
-    reserves:'precios de reserva'};
-  /* Cuántos de la plantilla están en venta, y por qué el resto no. Sin esto,
-     "0 listados" no distingue entre "ya estaban todos" y "no pudo con ninguno". */
-  const sq=rep.squad||{}, lo=(rep.listings||{}).left_out||{};
-  const loRows=Object.entries(lo);
-  $('squadstate').innerHTML=(sq.total!=null||loRows.length)
-    ?((sq.total!=null
-       ?'<div class="row"><div class="m">Plantilla<small>'
-        +esc(Object.entries(sq.counts||{}).map(([k,v])=>k+' '+v).join(' · '))
-        +'</small></div><div class="right">'+esc(sq.total)+'</div></div>':'')
-      +loRows.map(([why,n])=>
-        '<div class="row"><span class="tag '
-        +(why.indexOf('ya estaba')===0?'ok':'warn')+'">'+esc(n)+'</span>'
-        +'<div class="m">'+esc(why)+'</div></div>').join(''))
-    :'<div class="empty">Sin datos de la última revisión.</div>';
+    /* Lo que la revisión no llegó a hacer. Antes solo quedaba en un evento, que
+       se va hacia abajo; "no listó a nadie" necesita un motivo que siga ahí. */
+    const sk=rep.skipped_phases||[];
+    const PHASE={listings:'poner la plantilla en venta',clauses:'cláusulas',
+      gap_signings:'fichajes para huecos',bids:'pujas',shield:'blindaje',
+      matchday:'alineación de jornada',sources:'fuentes externas',
+      reserves:'precios de reserva'};
+    /* Cuántos de la plantilla están en venta, y por qué el resto no. Sin esto,
+       "0 listados" no distingue entre "ya estaban todos" y "no pudo con ninguno". */
+    const sq=rep.squad||{}, lo=(rep.listings||{}).left_out||{};
+    const loRows=Object.entries(lo);
+    $('squadstate').innerHTML=(sq.total!=null||loRows.length)
+      ?((sq.total!=null
+         ?'<div class="row"><div class="m">Plantilla<small>'
+          +esc(Object.entries(sq.counts||{}).map(([k,v])=>k+' '+v).join(' · '))
+          +'</small></div><div class="right">'+esc(sq.total)+'</div></div>':'')
+        +loRows.map(([why,n])=>
+          '<div class="row"><span class="tag '
+          +(why.indexOf('ya estaba')===0?'ok':'warn')+'">'+esc(n)+'</span>'
+          +'<div class="m">'+esc(why)+'</div></div>').join(''))
+      :'<div class="empty">Sin datos de la última revisión.</div>';
 
-  $('shortfall').innerHTML=sk.length
-    ?('<div class="row"><span class="tag warn">sin tiempo</span><div class="m">'
-      +'La última revisión no llegó a: '
-      +esc(sk.map(x=>PHASE[x]||x).join(', '))
-      +'<small>Pasa cuando la revisión se acerca al límite de 60s de Vercel'
-      +(rep.think_seconds?' — el análisis solo ya costó '+esc(rep.think_seconds)+'s':'')
-      +'. '+(rep.catchup_at
-             ?'Reintento programado para '+esc(when(rep.catchup_at,true))+'.'
-             :'Se retoma en la siguiente.')
-      +'</small></div></div>')
-    :'<div class="empty">La última revisión hizo todo lo que tenía que hacer.</div>';
+    $('shortfall').innerHTML=sk.length
+      ?('<div class="row"><span class="tag warn">sin tiempo</span><div class="m">'
+        +'La última revisión no llegó a: '
+        +esc(sk.map(x=>PHASE[x]||x).join(', '))
+        +'<small>Pasa cuando la revisión se acerca al límite de 60s de Vercel'
+        +(rep.think_seconds?' — el análisis solo ya costó '+esc(rep.think_seconds)+'s':'')
+        +'. '+(rep.catchup_at
+               ?'Reintento programado para '+esc(when(rep.catchup_at,true))+'.'
+               :'Se retoma en la siguiente.')
+        +'</small></div></div>')
+      :'<div class="empty">La última revisión hizo todo lo que tenía que hacer.</div>';
+  });
 
   /* ---- qué subiría más el once ---- */
-  const ups=(rep.upgrades||[]).filter(u=>u.gain>0);
-  list($('upgrades'),ups,u=>
-    '<div class="row"><span class="tag '+(u.affordable?'ok':'warn')+'">'
-    +esc('+'+Number(u.gain).toFixed(2))+'</span>'
-    +'<div class="m"><b>'+esc(u.nombre)+'</b> '+esc(u.pos||'')
-    +'<small>'+esc(u.gain_per_million)+' pts por millón'
-    +(u.affordable?'':' · no alcanza la caja')+'</small></div>'
-    +'<div class="right">'+esc(short(u.buy_price))+'</div></div>',
-    'Ningún fichaje del mercado mejoraría el once ahora mismo.');
+  part('qué subiría más el once',()=>{
+    const ups=(rep.upgrades||[]).filter(u=>u.gain>0);
+    list($('upgrades'),ups,u=>
+      '<div class="row"><span class="tag '+(u.affordable?'ok':'warn')+'">'
+      +esc('+'+Number(u.gain).toFixed(2))+'</span>'
+      +'<div class="m"><b>'+esc(u.nombre)+'</b> '+esc(u.pos||'')
+      +'<small>'+esc(u.gain_per_million)+' pts por millón'
+      +(u.affordable?'':' · no alcanza la caja')+'</small></div>'
+      +'<div class="right">'+esc(short(u.buy_price))+'</div></div>',
+      'Ningún fichaje del mercado mejoraría el once ahora mismo.');
+  });
 
   /* ---- ventas que financian un fichaje ---- */
-  list($('transfers'),rep.transfers,t=>
-    '<div class="row"><span class="tag idle">'+esc('+'+Number(t.net_gain).toFixed(2))+'</span>'
-    +'<div class="m"><b>'+esc(t.buy)+'</b> por '+esc(short(t.price))
-    +'<small>Vendiendo a '+esc(t.sell)+' ('+esc(short(t.raises))+', '
-    +(t.loss?'cuesta '+Number(t.loss).toFixed(2)+' pts':'no juega, no cuesta puntos')
-    +') · quedan '+esc(short(t.left_over))+'</small></div></div>',
-    'Ninguna venta desbloquea un fichaje que valga la pena.');
+  part('ventas que financian un fichaje',()=>{
+    list($('transfers'),rep.transfers,t=>
+      '<div class="row"><span class="tag idle">'+esc('+'+Number(t.net_gain).toFixed(2))+'</span>'
+      +'<div class="m"><b>'+esc(t.buy)+'</b> por '+esc(short(t.price))
+      +'<small>Vendiendo a '+esc(t.sell)+' ('+esc(short(t.raises))+', '
+      +(t.loss?'cuesta '+Number(t.loss).toFixed(2)+' pts':'no juega, no cuesta puntos')
+      +') · quedan '+esc(short(t.left_over))+'</small></div></div>',
+      'Ninguna venta desbloquea un fichaje que valga la pena.');
+  });
 
   /* ---- once titulares ---- */
-  list($('rebuild'),rep.rebuild,r=>
-    '<div class="row"><span class="tag '+(r.net_gain>=1?'ok':'idle')+'">+'
-    +esc(r.net_gain)+'</span><div class="m">'
-    +'<b>'+esc((r.buy||[]).map(b=>b.nombre).join(' + '))+'</b>'
-    +((r.sell||[]).length?' <span class="k">por '
-      +esc(r.sell.map(x=>x.nombre).join(' + '))+'</span>':'')
-    +'<small>'+esc(r.why||'')+'</small>'
-    /* The money, spelled out. A plan that asks to sell a footballer has to be
-       checkable from the phone: what it costs, what is in the account, and
-       what the sale actually contributes after the haircut. */
-    +(r.cash===undefined?'':'<small class="k">gasta '+esc(short(r.spend))
-      +' · caja '+esc(short(r.cash))
-      +(r.from_sales?' · la venta aporta '+esc(short(r.from_sales)):' · sin vender nada')
-      +(r.affordable===false?' · NO ALCANZA':'')+'</small>')
-    +'</div>'
-    +'<div class="right">'+esc(short(r.spend))+'</div></div>',
-    'Ninguna movida completa mejora el once ahora mismo.');
+  part('once titulares',()=>{
+    list($('rebuild'),rep.rebuild,r=>
+      '<div class="row"><span class="tag '+(r.net_gain>=1?'ok':'idle')+'">+'
+      +esc(r.net_gain)+'</span><div class="m">'
+      +'<b>'+esc((r.buy||[]).map(b=>b.nombre).join(' + '))+'</b>'
+      +((r.sell||[]).length?' <span class="k">por '
+        +esc(r.sell.map(x=>x.nombre).join(' + '))+'</span>':'')
+      +'<small>'+esc(r.why||'')+'</small>'
+      /* The money, spelled out. A plan that asks to sell a footballer has to be
+         checkable from the phone: what it costs, what is in the account, and
+         what the sale actually contributes after the haircut. */
+      +(r.cash===undefined?'':'<small class="k">gasta '+esc(short(r.spend))
+        +' · caja '+esc(short(r.cash))
+        +(r.from_sales?' · la venta aporta '+esc(short(r.from_sales)):' · sin vender nada')
+        +(r.affordable===false?' · NO ALCANZA':'')+'</small>')
+      +'</div>'
+      +'<div class="right">'+esc(short(r.spend))+'</div></div>',
+      'Ninguna movida completa mejora el once ahora mismo.');
 
-  list($('leaks'),rep.leaks,l=>
-    '<div class="row"><span class="tag '+(l.expected<=0.2?'bad':'warn')+'">'
-    +esc(l.expected)+' pts</span><div class="m"><b>'+esc(l.nombre)+'</b>'
-    +'<small>'+esc(l.line)+(l.tag?' · '+esc(l.tag):'')
-    +' — este puesto casi no puntúa</small></div></div>',
-    'Ningún puesto del once está regalando puntos.');
+    list($('leaks'),rep.leaks,l=>
+      '<div class="row"><span class="tag '+(l.expected<=0.2?'bad':'warn')+'">'
+      +esc(l.expected)+' pts</span><div class="m"><b>'+esc(l.nombre)+'</b>'
+      +'<small>'+esc(l.line)+(l.tag?' · '+esc(l.tag):'')
+      +' — este puesto casi no puntúa</small></div></div>',
+      'Ningún puesto del once está regalando puntos.');
+  });
 
   /* ---- el mercado entero, puntuado ---- */
-  /* How old this reading is. A market that closes every day is worthless read
-     from yesterday, and the page was presenting a stale report exactly like a
-     fresh one -- same rows, no date, nothing to tell them apart. */
-  const repAge=rep.at?(Date.now()-new Date(rep.at).getTime())/60000:null;
-  const mktStale=repAge!=null&&repAge>90;
-  $('market-age').innerHTML=rep.at
-    ?('<div class="row"><span class="tag '+(mktStale?'bad':'ok')+'">'
-      +(mktStale?'desactualizado':'al día')+'</span><div class="m">'
-      +'Mercado leído '+esc(ago(rep.at))
-      +(mktStale?'<small>El mercado de LaLiga cierra todos los días: esto ya no '
-              +'sirve para decidir. Tocá «Analizar el mercado ahora».</small>':'')
-      +'</div></div>')
-    :'';
-  const mk=rep.market||[];
-  const scls=n=>n>=70?'ok':n>=58?'idle':n>=45?'warn':'bad';
-  const mkHead=mk.length
-    ?('<div class="row"><span class="tag idle">'+mk.length+'</span><div class="m">'
-      +'jugadores analizados, todos con su veredicto'
-      +'<small>'+esc(mk.filter(o=>o.verdict==='comprar'||o.score>=70).length)
-      +' valen la pena · '+esc(mk.filter(o=>!o.affordable).length)
-      +' no alcanzan</small></div></div>'):'';
-  $('market').innerHTML=mk.length
-    ? mkHead+mk.map(o=>'<details class="why"><summary>'
-        +'<span class="score '+scls(o.score)+'">'+esc(o.score)+'</span>'
-        +'<span class="grow"><b>'+esc(o.nombre)+'</b>'
-        +'<small>'+esc(o.pos||'?')+' · '+esc(o.via||'')+' · '+esc(o.verdict)
-        +(o.expected_points!=null?' · '+esc(o.expected_points)+' pts/jornada':'')
-        +(o.points_per_million!=null?' · '+esc(o.points_per_million)+' pts/M':'')
-        +(o.media_reciente!=null?' · últimas: '+esc((o.ultimas_jornadas||[]).join('-'))
-          +' (media '+esc(o.media_reciente)+')':'')
-        +(o.rival_texto?' · '+esc(o.rival_texto):'')
-        +'</small></span>'
-        +'<span class="num">'+esc(short(o.buy_price))+'</span></summary>'
-        +'<ul>'+(o.reasons||[]).map(r=>'<li>'+esc(r)+'</li>').join('')
-        +(o.expires_at?'<li>Cierra '+esc(when(o.expires_at,true))+'.</li>':'')
-        +'</ul></details>').join('')
-    : '<div class="empty">'+(function(){
-        // "No lo miró" y "lo miró y no había nadie" son afirmaciones distintas.
-        // Mostrar la primera para las dos asusta, y encima es falsa.
-        if(!rep.at) return 'Todavía no analizó el mercado — esperá a la primera revisión.';
-        const c=rep.market_census||{};
-        if(c.anuncios==null) return 'La última revisión no encontró nada en venta.';
-        if(!c.ajenos) return 'Revisó a las '+esc(when(rep.at,true))+': había '
-          +esc(c.anuncios)+' anuncios y '+esc(c.mios)+' eran tuyos. '
-          +'Nadie más estaba en venta, así que no había nada que comprar. '
-          +'El mercado de LaLiga se renueva cada día.';
-        return 'Revisó '+esc(c.ajenos)+' anuncios ajenos y ninguno pasó el filtro.';
-      })()+'</div>';
+  part('el mercado entero, puntuado',()=>{
+    /* How old this reading is. A market that closes every day is worthless read
+       from yesterday, and the page was presenting a stale report exactly like a
+       fresh one -- same rows, no date, nothing to tell them apart. */
+    const repAge=rep.at?(Date.now()-new Date(rep.at).getTime())/60000:null;
+    const mktStale=repAge!=null&&repAge>90;
+    $('market-age').innerHTML=rep.at
+      ?('<div class="row"><span class="tag '+(mktStale?'bad':'ok')+'">'
+        +(mktStale?'desactualizado':'al día')+'</span><div class="m">'
+        +'Mercado leído '+esc(ago(rep.at))
+        +(mktStale?'<small>El mercado de LaLiga cierra todos los días: esto ya no '
+                +'sirve para decidir. Tocá «Analizar el mercado ahora».</small>':'')
+        +'</div></div>')
+      :'';
+    const mk=rep.market||[];
+    const scls=n=>n>=70?'ok':n>=58?'idle':n>=45?'warn':'bad';
+    const mkHead=mk.length
+      ?('<div class="row"><span class="tag idle">'+mk.length+'</span><div class="m">'
+        +'jugadores analizados, todos con su veredicto'
+        +'<small>'+esc(mk.filter(o=>o.verdict==='comprar'||o.score>=70).length)
+        +' valen la pena · '+esc(mk.filter(o=>!o.affordable).length)
+        +' no alcanzan</small></div></div>'):'';
+    $('market').innerHTML=mk.length
+      ? mkHead+mk.map(o=>'<details class="why"><summary>'
+          +'<span class="score '+scls(o.score)+'">'+esc(o.score)+'</span>'
+          +'<span class="grow"><b>'+esc(o.nombre)+'</b>'
+          +'<small>'+esc(o.pos||'?')+' · '+esc(o.via||'')+' · '+esc(o.verdict)
+          +(o.expected_points!=null?' · '+esc(o.expected_points)+' pts/jornada':'')
+          +(o.points_per_million!=null?' · '+esc(o.points_per_million)+' pts/M':'')
+          +(o.media_reciente!=null?' · últimas: '+esc((o.ultimas_jornadas||[]).join('-'))
+            +' (media '+esc(o.media_reciente)+')':'')
+          +(o.rival_texto?' · '+esc(o.rival_texto):'')
+          +'</small></span>'
+          +'<span class="num">'+esc(short(o.buy_price))+'</span></summary>'
+          +'<ul>'+(o.reasons||[]).map(r=>'<li>'+esc(r)+'</li>').join('')
+          +(o.expires_at?'<li>Cierra '+esc(when(o.expires_at,true))+'.</li>':'')
+          +'</ul></details>').join('')
+      : '<div class="empty">'+(function(){
+          // "No lo miró" y "lo miró y no había nadie" son afirmaciones distintas.
+          // Mostrar la primera para las dos asusta, y encima es falsa.
+          if(!rep.at) return 'Todavía no analizó el mercado — esperá a la primera revisión.';
+          const c=rep.market_census||{};
+          if(c.anuncios==null) return 'La última revisión no encontró nada en venta.';
+          if(!c.ajenos) return 'Revisó a las '+esc(when(rep.at,true))+': había '
+            +esc(c.anuncios)+' anuncios y '+esc(c.mios)+' eran tuyos. '
+            +'Nadie más estaba en venta, así que no había nada que comprar. '
+            +'El mercado de LaLiga se renueva cada día.';
+          return 'Revisó '+esc(c.ajenos)+' anuncios ajenos y ninguno pasó el filtro.';
+        })()+'</div>';
 
-  const flips=rep.flips||[];
-  $('flips').innerHTML=flips.length
-    ?('<table><thead><tr><th>Jugador</th><th>Vía</th><th class="num">Compra</th>'
-      +'<th class="num">Margen</th><th>Cierra</th></tr></thead><tbody>'
-      +flips.map(o=>'<tr><td>'+esc(o.nombre)+'</td><td>'+esc(o.via)+'</td>'
-        +'<td class="num">'+esc(short(o.buy_price))+'</td>'
-        +'<td class="num">'+esc(o.margin_pct)+'%</td>'
-        +'<td>'+esc(when(o.expires_at,true))+'</td></tr>').join('')+'</tbody></table>')
-    :'<div class="empty">Sin oportunidades rentables ahora mismo.</div>';
+    const flips=rep.flips||[];
+    $('flips').innerHTML=flips.length
+      ?('<table><thead><tr><th>Jugador</th><th>Vía</th><th class="num">Compra</th>'
+        +'<th class="num">Margen</th><th>Cierra</th></tr></thead><tbody>'
+        +flips.map(o=>'<tr><td>'+esc(o.nombre)+'</td><td>'+esc(o.via)+'</td>'
+          +'<td class="num">'+esc(short(o.buy_price))+'</td>'
+          +'<td class="num">'+esc(o.margin_pct)+'%</td>'
+          +'<td>'+esc(when(o.expires_at,true))+'</td></tr>').join('')+'</tbody></table>')
+      :'<div class="empty">Sin oportunidades rentables ahora mismo.</div>';
 
-  const li=(rep.listings||{}), lrows=li.listed||li.would_list||[];
-  $('listings').innerHTML=lrows.length
-    ?('<table><thead><tr><th>Jugador</th><th class="num">Valor</th>'
-      +'<th class="num">Reserva</th><th class="num">+%</th></tr></thead><tbody>'
-      +lrows.map(r=>'<tr><td>'+esc(r.nombre)+(r.in_xi?' <span class="tag idle">XI</span>':'')
-        +'</td><td class="num">'+esc(short(r.value))+'</td>'
-        +'<td class="num">'+esc(short(r.price))+'</td>'
-        +'<td class="num">+'+esc(r.premium_pct)+'%</td></tr>').join('')+'</tbody></table>')
-    :'<div class="empty">Sin listados nuevos — la plantilla ya está en el mercado.</div>';
+    const li=(rep.listings||{}), lrows=li.listed||li.would_list||[];
+    $('listings').innerHTML=lrows.length
+      ?('<table><thead><tr><th>Jugador</th><th class="num">Valor</th>'
+        +'<th class="num">Reserva</th><th class="num">+%</th></tr></thead><tbody>'
+        +lrows.map(r=>'<tr><td>'+esc(r.nombre)+(r.in_xi?' <span class="tag idle">XI</span>':'')
+          +'</td><td class="num">'+esc(short(r.value))+'</td>'
+          +'<td class="num">'+esc(short(r.price))+'</td>'
+          +'<td class="num">+'+esc(r.premium_pct)+'%</td></tr>').join('')+'</tbody></table>')
+      :'<div class="empty">Sin listados nuevos — la plantilla ya está en el mercado.</div>';
+  });
 
   /* ---- cola ---- */
-  const pend=d.pending_actions||[];
-  $('c-cola').textContent=pend.length?pend.length:'';
-  const ATYPE={bid:'puja',review:'revisión',lineup:'alineación',
-    reminder:'aviso',llm_strategy:'estrategia',list_squad:'poner en venta',
-    clause:'cláusula',shield:'blindaje',warm_sources:'refrescar datos'};
-  list($('pending'),pend,a=>{
-    const p=a.payload||{};
-    return '<div class="row"><div class="t">'+esc(when(a.execute_at,true))+'</div>'
-      +'<div class="m"><b>'+esc(ATYPE[a.type]||a.type)+'</b> '
-      +esc(p.nombre||p.message||p.market_id||'')
-      +(p.max_bid?' <span class="tag idle">tope '+esc(short(p.max_bid))+'</span>':'')
-      +'<small>'+esc(a.status)+' · '+esc(ago(a.execute_at))+'</small></div></div>';
-  },'No hay nada programado.');
+  part('cola',()=>{
+    const pend=d.pending_actions||[];
+    $('c-cola').textContent=pend.length?pend.length:'';
+    const ATYPE={bid:'puja',review:'revisión',lineup:'alineación',
+      reminder:'aviso',llm_strategy:'estrategia',list_squad:'poner en venta',
+      clause:'cláusula',shield:'blindaje',warm_sources:'refrescar datos'};
+    list($('pending'),pend,a=>{
+      const p=a.payload||{};
+      return '<div class="row"><div class="t">'+esc(when(a.execute_at,true))+'</div>'
+        +'<div class="m"><b>'+esc(ATYPE[a.type]||a.type)+'</b> '
+        +esc(p.nombre||p.message||p.market_id||'')
+        +(p.max_bid?' <span class="tag idle">tope '+esc(short(p.max_bid))+'</span>':'')
+        +'<small>'+esc(a.status)+' · '+esc(ago(a.execute_at))+'</small></div></div>';
+    },'No hay nada programado.');
+  });
 
   /* ---- pujas: qué pasó con cada una ---- */
-  const BID={bid:['ok','pujó'],already:['idle','ya tenía puja'],
-    gone:['bad','el anuncio ya no estaba'],closed:['bad','cerró sin pujar'],
-    waiting:['warn','esperando el cierre'],unpriced:['warn','sin precio usable'],
-    over_cap:['warn','se pasó de mi techo'],raised:['ok','subió la puja'],
-    guarding:['idle','vigilando su puja']};
-  const bidrows=[];
-  (d.executions||[]).forEach(x=>((x.summary||{}).actions||[]).forEach(a=>{
-    if(a.type!=='bid')return;
-    const r=a.result||{}, k=BID[r.status]||null;
-    bidrows.push({at:x.started_at,
-      nombre:r.nombre||(a.key||'').split(':')[2]||'?',
-      cls:a.status==='failed'?'bad':a.reason==='expired'?'bad':(k?k[0]:'idle'),
-      label:a.reason==='expired'?'venció sin ejecutarse'
-            :a.status==='failed'?'falló':(k?k[1]:(r.status||a.status)),
-      amount:r.amount,
-      why:r.last_call?'Pujó antes de tiempo: no quedaba otra ejecución antes del cierre.'
-          :r.status==='raised'
-            ?('Entró otro postor, subí de '+short(r.previous)+' a '+short(r.amount)+'.')
-          :r.status==='guarding'
-            ?(r.why||'Mi puja sigue siendo la buena; la vigilo hasta el cierre.')
-          :r.status==='over_cap'
-            ?('Subió a '+short(r.value)+' y mi techo era '+short(r.ceiling)
-              +'. LaLiga rechaza cualquier puja por debajo del valor actual.')
-          :(a.error||'')});
-  }));
-  list($('bids'),bidrows,b=>
-    '<div class="row"><span class="tag '+b.cls+'">'+esc(b.label)+'</span>'
-    +'<div class="m"><b>'+esc(b.nombre)+'</b>'
-    +'<small>'+esc(when(b.at,true))+(b.why?' · '+esc(b.why):'')+'</small></div>'
-    +'<div class="right">'+(b.amount?esc(short(b.amount)):'')+'</div></div>',
-    'Todavía no se ejecutó ninguna puja.');
+  part('pujas: qué pasó con cada una',()=>{
+    const BID={bid:['ok','pujó'],already:['idle','ya tenía puja'],
+      gone:['bad','el anuncio ya no estaba'],closed:['bad','cerró sin pujar'],
+      waiting:['warn','esperando el cierre'],unpriced:['warn','sin precio usable'],
+      over_cap:['warn','se pasó de mi techo'],raised:['ok','subió la puja'],
+      guarding:['idle','vigilando su puja']};
+    const bidrows=[];
+    (d.executions||[]).forEach(x=>((x.summary||{}).actions||[]).forEach(a=>{
+      if(a.type!=='bid')return;
+      const r=a.result||{}, k=BID[r.status]||null;
+      bidrows.push({at:x.started_at,
+        nombre:r.nombre||(a.key||'').split(':')[2]||'?',
+        cls:a.status==='failed'?'bad':a.reason==='expired'?'bad':(k?k[0]:'idle'),
+        label:a.reason==='expired'?'venció sin ejecutarse'
+              :a.status==='failed'?'falló':(k?k[1]:(r.status||a.status)),
+        amount:r.amount,
+        why:r.last_call?'Pujó antes de tiempo: no quedaba otra ejecución antes del cierre.'
+            :r.status==='raised'
+              ?('Entró otro postor, subí de '+short(r.previous)+' a '+short(r.amount)+'.')
+            :r.status==='guarding'
+              ?(r.why||'Mi puja sigue siendo la buena; la vigilo hasta el cierre.')
+            :r.status==='over_cap'
+              ?('Subió a '+short(r.value)+' y mi techo era '+short(r.ceiling)
+                +'. LaLiga rechaza cualquier puja por debajo del valor actual.')
+            :(a.error||'')});
+    }));
+    list($('bids'),bidrows,b=>
+      '<div class="row"><span class="tag '+b.cls+'">'+esc(b.label)+'</span>'
+      +'<div class="m"><b>'+esc(b.nombre)+'</b>'
+      +'<small>'+esc(when(b.at,true))+(b.why?' · '+esc(b.why):'')+'</small></div>'
+      +'<div class="right">'+(b.amount?esc(short(b.amount)):'')+'</div></div>',
+      'Todavía no se ejecutó ninguna puja.');
+  });
 
   /* ---- qué predijo y qué pasó ---- */
-  const sc=rep.scoring||{}, acc=sc.accuracy||{};
-  $('scoring').innerHTML=(acc.weeks||sc.predicted||sc.settled)
-    ? ((sc.settled
-        ?'<div class="row"><span class="tag '
-         +(Math.abs(sc.settled.error||0)<=5?'ok':'warn')+'">jornada '
-         +esc(sc.settled.week)+'</span><div class="m">Esperaba '
-         +esc(sc.settled.expected)+' y saqué <b>'+esc(sc.settled.actual)+'</b>'
-         +'<small>diferencia '+esc(sc.settled.error)+' pts</small></div></div>':'')
-      +(sc.predicted
-        ?'<div class="row"><span class="tag idle">jornada '
-         +esc(sc.predicted.week)+'</span><div class="m">Espero <b>'
-         +esc(sc.predicted.expected)+'</b> pts con '+esc(sc.predicted.formation)
-         +'</div></div>':'')
-      +(acc.weeks
-        ?'<div class="row"><div class="m">Acierto del modelo'
-         +'<small>'+esc(acc.weeks)+' jornada(s) medidas · error medio '
-         +esc(acc.mean_abs_error)+' pts</small></div>'
-         +'<div class="right"><span class="tag '
-         +(Math.abs(acc.bias||0)<=3?'ok':'warn')+'">'
-         +((acc.bias||0)>0?'+':'')+esc(acc.bias)+'</span></div></div>'
-         +'<div class="row"><div class="m"><small>'
-         +((acc.bias||0)>0?'Saco MÁS de lo que estimo: mis números son tímidos.'
-           :(acc.bias||0)<0?'Saco MENOS de lo que estimo: mis números son generosos.'
-           :'Estimo bien.')+'</small></div></div>':''))
-    : '<div class="empty">Todavía no cerró ninguna jornada con predicción.</div>';
+  part('qué predijo y qué pasó',()=>{
+    const sc=rep.scoring||{}, acc=sc.accuracy||{};
+    $('scoring').innerHTML=(acc.weeks||sc.predicted||sc.settled)
+      ? ((sc.settled
+          ?'<div class="row"><span class="tag '
+           +(Math.abs(sc.settled.error||0)<=5?'ok':'warn')+'">jornada '
+           +esc(sc.settled.week)+'</span><div class="m">Esperaba '
+           +esc(sc.settled.expected)+' y saqué <b>'+esc(sc.settled.actual)+'</b>'
+           +'<small>diferencia '+esc(sc.settled.error)+' pts</small></div></div>':'')
+        +(sc.predicted
+          ?'<div class="row"><span class="tag idle">jornada '
+           +esc(sc.predicted.week)+'</span><div class="m">Espero <b>'
+           +esc(sc.predicted.expected)+'</b> pts con '+esc(sc.predicted.formation)
+           +'</div></div>':'')
+        +(acc.weeks
+          ?'<div class="row"><div class="m">Acierto del modelo'
+           +'<small>'+esc(acc.weeks)+' jornada(s) medidas · error medio '
+           +esc(acc.mean_abs_error)+' pts</small></div>'
+           +'<div class="right"><span class="tag '
+           +(Math.abs(acc.bias||0)<=3?'ok':'warn')+'">'
+           +((acc.bias||0)>0?'+':'')+esc(acc.bias)+'</span></div></div>'
+           +'<div class="row"><div class="m"><small>'
+           +((acc.bias||0)>0?'Saco MÁS de lo que estimo: mis números son tímidos.'
+             :(acc.bias||0)<0?'Saco MENOS de lo que estimo: mis números son generosos.'
+             :'Estimo bien.')+'</small></div></div>':''))
+      : '<div class="empty">Todavía no cerró ninguna jornada con predicción.</div>';
 
-  list($('ledger'),rep.ledger,e=>
-    '<div class="row"><span class="tag '+(e.how==='out'?'bad':'ok')+'">'
-    +(e.how==='out'?'salió':'entró')+'</span>'
-    +'<div class="m"><b>'+esc(e.nombre)+'</b><small>'+esc(when(e.at,true))
-    +(e.money_delta?' · caja '+((e.money_delta>0?'+':'')+short(e.money_delta)):'')
-    +'</small></div></div>',
-    'Todavía no entró ni salió nadie.');
+    list($('ledger'),rep.ledger,e=>
+      '<div class="row"><span class="tag '+(e.how==='out'?'bad':'ok')+'">'
+      +(e.how==='out'?'salió':'entró')+'</span>'
+      +'<div class="m"><b>'+esc(e.nombre)+'</b><small>'+esc(when(e.at,true))
+      +(e.money_delta?' · caja '+((e.money_delta>0?'+':'')+short(e.money_delta)):'')
+      +'</small></div></div>',
+      'Todavía no entró ni salió nadie.');
+  });
 
   /* ---- análisis de la partida ---- */
-  const rv0=rep.rivals||[], pnl=rep.pnl||null;
-  const leader=rv0.find(r=>r.position===1)||rv0[0];
-  const richest=Math.max(0,...rv0.filter(r=>!r.is_me).map(r=>r.cash||0));
-  const arow=(k,v,note)=>'<div class="row"><div class="m">'+esc(k)
-    +(note?'<small>'+esc(note)+'</small>':'')+'</div>'
-    +'<div class="right">'+v+'</div></div>';
-  const money=n=>'<span class="num">'+esc(short(n))+'</span>';
-  const an=[];
-  if(pnl){
-    const net=Number(pnl.net||0);
-    an.push(arow('Beneficio del mercado',
-      '<span class="tag '+(net>=0?'ok':'bad')+'">'+(net>=0?'+':'')+esc(short(net))
-      +'</span>','compras '+short(pnl.purchases)+' · ventas '+short(pnl.sales)));
-    an.push(arow('Valor de la plantilla',money(pnl.team_value)));
-  }
-  an.push(arow('Caja disponible',money(rep.money),
-    richest?('el rival más rico tiene ~'+short(richest)):''));
-  if(me&&leader){
-    const gap=(leader.points||0)-(me.points||0);
-    an.push(arow('Posición','<span class="tag '+(me.position===1?'ok':'idle')+'">#'
-      +esc(me.position)+'</span>',
-      me.position===1?'sos el líder':('a '+gap+' pts de '+(leader.manager||'la cabeza'))));
-  }
-  if(st)an.push(arow('Postura',
-    '<span class="tag '+(STANCE[st.stance]||['idle'])[0]+'">'
-    +esc((STANCE[st.stance]||[,st.stance])[1]||st.stance)+'</span>',st.why||''));
-  const gp=rep.gaps||[];
-  an.push(arow('Huecos en la plantilla',
-    gp.length?('<span class="tag bad">'+esc(gp.join(', '))+'</span>')
-             :'<span class="tag ok">ninguno</span>',
-    gp.length?'un puesto vacío cuesta puntos cada jornada':''));
-  $('analysis').innerHTML=an.length?an.join('')
-    :'<div class="empty">Sin análisis todavía.</div>';
+  part('análisis de la partida',()=>{
+    const rv0=rep.rivals||[], pnl=rep.pnl||null;
+    const leader=rv0.find(r=>r.position===1)||rv0[0];
+    const richest=Math.max(0,...rv0.filter(r=>!r.is_me).map(r=>r.cash||0));
+    const arow=(k,v,note)=>'<div class="row"><div class="m">'+esc(k)
+      +(note?'<small>'+esc(note)+'</small>':'')+'</div>'
+      +'<div class="right">'+v+'</div></div>';
+    const money=n=>'<span class="num">'+esc(short(n))+'</span>';
+    const an=[];
+    if(pnl){
+      const net=Number(pnl.net||0);
+      an.push(arow('Beneficio del mercado',
+        '<span class="tag '+(net>=0?'ok':'bad')+'">'+(net>=0?'+':'')+esc(short(net))
+        +'</span>','compras '+short(pnl.purchases)+' · ventas '+short(pnl.sales)));
+      an.push(arow('Valor de la plantilla',money(pnl.team_value)));
+    }
+    an.push(arow('Caja disponible',money(rep.money),
+      richest?('el rival más rico tiene ~'+short(richest)):''));
+    if(me&&leader){
+      const gap=(leader.points||0)-(me.points||0);
+      an.push(arow('Posición','<span class="tag '+(me.position===1?'ok':'idle')+'">#'
+        +esc(me.position)+'</span>',
+        me.position===1?'sos el líder':('a '+gap+' pts de '+(leader.manager||'la cabeza'))));
+    }
+    if(st)an.push(arow('Postura',
+      '<span class="tag '+(STANCE[st.stance]||['idle'])[0]+'">'
+      +esc((STANCE[st.stance]||[,st.stance])[1]||st.stance)+'</span>',st.why||''));
+    const gp=rep.gaps||[];
+    an.push(arow('Huecos en la plantilla',
+      gp.length?('<span class="tag bad">'+esc(gp.join(', '))+'</span>')
+               :'<span class="tag ok">ninguno</span>',
+      gp.length?'un puesto vacío cuesta puntos cada jornada':''));
+    $('analysis').innerHTML=an.length?an.join('')
+      :'<div class="empty">Sin análisis todavía.</div>';
+  });
 
   /* ---- liga ---- */
-  const rv=rep.rivals||[];
-  $('rivals').innerHTML=rv.length
-    ?('<table><thead><tr><th>#</th><th>Mánager</th><th class="num">Pts</th>'
-      +'<th class="num">Valor</th><th class="num">Caja est.</th></tr></thead><tbody>'
-      +rv.map(r=>'<tr'+(r.is_me?' class="me"':'')+'><td>'+esc(r.position)+'</td>'
-        +'<td>'+esc(r.manager||'?')+(r.is_me?' <span class="tag idle">vos</span>':'')+'</td>'
-        +'<td class="num">'+esc(r.points??'—')+'</td>'
-        +'<td class="num">'+esc(short(r.team_value))+'</td>'
-        +'<td class="num">~'+esc(short(r.cash))+'</td></tr>').join('')+'</tbody></table>')
-    :'<div class="empty">Sin análisis de rivales todavía.</div>';
+  part('liga',()=>{
+    const rv=rep.rivals||[];
+    $('rivals').innerHTML=rv.length
+      ?('<table><thead><tr><th>#</th><th>Mánager</th><th class="num">Pts</th>'
+        +'<th class="num">Valor</th><th class="num">Caja est.</th></tr></thead><tbody>'
+        +rv.map(r=>'<tr'+(r.is_me?' class="me"':'')+'><td>'+esc(r.position)+'</td>'
+          +'<td>'+esc(r.manager||'?')+(r.is_me?' <span class="tag idle">vos</span>':'')+'</td>'
+          +'<td class="num">'+esc(r.points??'—')+'</td>'
+          +'<td class="num">'+esc(short(r.team_value))+'</td>'
+          +'<td class="num">~'+esc(short(r.cash))+'</td></tr>').join('')+'</tbody></table>')
+      :'<div class="empty">Sin análisis de rivales todavía.</div>';
+  });
 
   /* ---- eventos ---- */
-  /* El detalle venía como JSON crudo, que es legible para mí y para nadie más.
-     `why` es la frase escrita para leerse, así que va primero y entera. */
-  const detail=v=>{
-    if(v==null||v==='')return '';
-    if(typeof v!=='object')return esc(v);
-    const out=[];
-    if(v.why)out.push(esc(v.why));
-    Object.keys(v).forEach(k=>{
-      if(k==='why'||v[k]==null||v[k]==='')return;
-      out.push(esc(k.replace(/_/g,' '))+': '
-        +esc(typeof v[k]==='object'?JSON.stringify(v[k]):v[k]));
-    });
-    return out.join(' · ');
-  };
-  const EV={bid:['ok','PUJA'],'bid-plan':['idle','PLAN'],sell:['ok','VENTA'],
-    clause:['warn','CLÁUSULA'],lineup:['idle','ONCE'],review:['idle','REVISIÓN'],
-    note:['idle','NOTA'],cancel:['warn','CANCELA'],error:['bad','ERROR'],
-    read:['idle','LECTURA']};
-  list($('events'),d.events,e=>{
-    const k=EV[e.kind]||['idle',String(e.kind||'').toUpperCase()];
-    const d2=detail(e.detail);
-    return '<div class="row"><span class="tag '+(e.status==='error'?'bad':k[0])+'">'
-      +esc(k[1])+'</span><div class="m">'+esc(e.title)
-      +'<small>'+esc(when(e.iso,true))+(d2?' · ':'')+d2+'</small></div></div>';
-  },'Todavía sin eventos.');
+  part('eventos',()=>{
+    /* El detalle venía como JSON crudo, que es legible para mí y para nadie más.
+       `why` es la frase escrita para leerse, así que va primero y entera. */
+    const detail=v=>{
+      if(v==null||v==='')return '';
+      if(typeof v!=='object')return esc(v);
+      const out=[];
+      if(v.why)out.push(esc(v.why));
+      Object.keys(v).forEach(k=>{
+        if(k==='why'||v[k]==null||v[k]==='')return;
+        out.push(esc(k.replace(/_/g,' '))+': '
+          +esc(typeof v[k]==='object'?JSON.stringify(v[k]):v[k]));
+      });
+      return out.join(' · ');
+    };
+    const EV={bid:['ok','PUJA'],'bid-plan':['idle','PLAN'],sell:['ok','VENTA'],
+      clause:['warn','CLÁUSULA'],lineup:['idle','ONCE'],review:['idle','REVISIÓN'],
+      note:['idle','NOTA'],cancel:['warn','CANCELA'],error:['bad','ERROR'],
+      read:['idle','LECTURA']};
+    list($('events'),d.events,e=>{
+      const k=EV[e.kind]||['idle',String(e.kind||'').toUpperCase()];
+      const d2=detail(e.detail);
+      return '<div class="row"><span class="tag '+(e.status==='error'?'bad':k[0])+'">'
+        +esc(k[1])+'</span><div class="m">'+esc(e.title)
+        +'<small>'+esc(when(e.iso,true))+(d2?' · ':'')+d2+'</small></div></div>';
+    },'Todavía sin eventos.');
+  });
 
   /* ---- sistema ---- */
-  const a=d.autonomy||{}, llm=d.llm||{};
-  const flag=(k,v)=>'<div class="row"><div class="m">'+esc(k)+'</div><div class="right">'
-    +'<span class="tag '+(v?'ok':'warn')+'">'+(v?'sí':'no')+'</span></div></div>';
-  $('config').innerHTML=
-    flag('Ejecuta acciones',a.execute)+flag('Alineación automática',a.lineup)
-    +flag('Pone la plantilla en venta',a.list)
-    +flag('Pujas automáticas',a.bids)+flag('Vende con oferta buena',a.sells)
-    +flag('Paga cláusulas',a.clauses)+flag('Blinda jugadores',a.shield)
-    +flag('Sube cláusulas para protegerse',a.raise_clause)
-    +flag('Realinea antes de cada partido',a.matchday)
-    +'<div class="row"><div class="m">LLM</div><div class="right">'
-    +(llm.enabled?('<span class="tag ok">'+esc(llm.model||'on')+'</span>')
-                 :'<span class="tag warn">apagado</span>')+'</div></div>'
-    +'<div class="row"><div class="m">Avisos</div><div class="right">'
-    +((d.notify||{}).enabled
-        ?'<span class="tag ok">'+((d.notify||{}).telegram?'Telegram':'webhook')+'</span>'
-        :'<span class="tag warn">apagados</span>')+'</div></div>'
-    +(function(){const f=(d.report||{}).sources&&(d.report||{}).sources.form||null;
-       return f?('<div class="row"><div class="m">Datos por jornada (oficiales)'
-         +'<small>forma reciente y minutos; no dependen del scraping</small></div>'
-         +'<div class="right"><span class="tag '+(f.ok?'ok':'warn')+'">'
-         +(f.ok?f.players+' jugadores · '+f.weeks+' jornadas':'sin datos')
-         +'</span></div></div>'):'';})()
-    +'<div class="row"><div class="m">Almacenamiento</div>'
-    +'<div class="right">'+esc(d.storage||'?')+'</div></div>';
+  part('sistema',()=>{
+    const a=d.autonomy||{}, llm=d.llm||{};
+    const flag=(k,v)=>'<div class="row"><div class="m">'+esc(k)+'</div><div class="right">'
+      +'<span class="tag '+(v?'ok':'warn')+'">'+(v?'sí':'no')+'</span></div></div>';
+    $('config').innerHTML=
+      flag('Ejecuta acciones',a.execute)+flag('Alineación automática',a.lineup)
+      +flag('Pone la plantilla en venta',a.list)
+      +flag('Pujas automáticas',a.bids)+flag('Vende con oferta buena',a.sells)
+      +flag('Paga cláusulas',a.clauses)+flag('Blinda jugadores',a.shield)
+      +flag('Sube cláusulas para protegerse',a.raise_clause)
+      +flag('Realinea antes de cada partido',a.matchday)
+      +'<div class="row"><div class="m">LLM</div><div class="right">'
+      +(llm.enabled?('<span class="tag ok">'+esc(llm.model||'on')+'</span>')
+                   :'<span class="tag warn">apagado</span>')+'</div></div>'
+      +'<div class="row"><div class="m">Avisos</div><div class="right">'
+      +((d.notify||{}).enabled
+          ?'<span class="tag ok">'+((d.notify||{}).telegram?'Telegram':'webhook')+'</span>'
+          :'<span class="tag warn">apagados</span>')+'</div></div>'
+      +(function(){const f=(d.report||{}).sources&&(d.report||{}).sources.form||null;
+         return f?('<div class="row"><div class="m">Datos por jornada (oficiales)'
+           +'<small>forma reciente y minutos; no dependen del scraping</small></div>'
+           +'<div class="right"><span class="tag '+(f.ok?'ok':'warn')+'">'
+           +(f.ok?f.players+' jugadores · '+f.weeks+' jornadas':'sin datos')
+           +'</span></div></div>'):'';})()
+      +'<div class="row"><div class="m">Almacenamiento</div>'
+      +'<div class="right">'+esc(d.storage||'?')+'</div></div>';
 
-  list($('executions'),d.executions,x=>{
-    const sm=x.summary||{}, bits=[];
-    if(sm.actions)bits.push(sm.actions.length+' acciones');
-    if(sm.review&&sm.review.status)bits.push('review '+sm.review.status);
-    if(sm.duration_seconds!==undefined)bits.push(sm.duration_seconds+'s');
-    return '<div class="row"><div class="t">'+esc(when(x.started_at,true))+'</div>'
-      +'<div class="m"><b>'+esc(x.status)+'</b> '+esc(bits.join(' · '))
-      +(x.error?'<small>'+esc(x.error)+'</small>':'')+'</div></div>';
-  },'Sin ejecuciones registradas.');
+    list($('executions'),d.executions,x=>{
+      const sm=x.summary||{}, bits=[];
+      if(sm.actions)bits.push(sm.actions.length+' acciones');
+      if(sm.review&&sm.review.status)bits.push('review '+sm.review.status);
+      if(sm.duration_seconds!==undefined)bits.push(sm.duration_seconds+'s');
+      return '<div class="row"><div class="t">'+esc(when(x.started_at,true))+'</div>'
+        +'<div class="m"><b>'+esc(x.status)+'</b> '+esc(bits.join(' · '))
+        +(x.error?'<small>'+esc(x.error)+'</small>':'')+'</div></div>';
+    },'Sin ejecuciones registradas.');
+  });
+
+  /* ---- lo que no se pudo mostrar ---- */
+  /* Two different failures, one box, because the reader's question is the same
+     either way: what am I not seeing? One is the database not answering in
+     time, which fixes itself next minute. The other is this page throwing,
+     which does not fix itself and used to be invisible — it just blanked
+     everything below it. */
+  const degBox=$('degraded');
+  if(degBox){
+    const deg=d.degraded||[];
+    degBox.innerHTML=
+      (deg.length
+        ?('<div class="row"><span class="tag warn">'+deg.length+'</span><div class="m">'
+          +'La base tardó de más y estas partes no llegaron: '
+          +esc(deg.map(x=>x.part).join(', '))
+          +'<small>El bot sigue trabajando; se reintenta en el próximo minuto.</small>'
+          +'</div></div>'):'')
+      +(broken.length
+        ?('<div class="row"><span class="tag bad">'+broken.length+'</span><div class="m">'
+          +'Estas secciones no se pudieron dibujar: '
+          +esc(broken.map(x=>x.part).join(', '))
+          +'<small>'+esc(broken.map(x=>x.err&&x.err.message).join(' · '))
+          +'</small></div></div>'):'');
+    degBox.style.display=(deg.length||broken.length)?'':'none';
+  }
 }
 
 /* ---------- auto refresh ---------- */
