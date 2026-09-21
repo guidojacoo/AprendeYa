@@ -238,6 +238,10 @@
           no lo que suma cada fichaje por separado.</div>
         <div id="rebuild"></div></section>
       <section><h2>Dónde pierdo puntos cada jornada</h2><div id="leaks"></div></section>
+      <section><h2>Sobran en su posición</h2>
+        <div class="note">Su línea está llena: no pueden alinear por muchos
+          puntos que tengan. Es dinero congelado.</div>
+        <div id="surplus"></div></section>
       <section><h2>Ventas que financian un fichaje</h2><div id="transfers"></div></section>
       <section><h2>Todo el mercado, puntuado</h2>
         <div class="note">Tocá un jugador para ver el razonamiento.</div>
@@ -616,6 +620,20 @@ function render(d){
   });
 
   /* ---- ventas que financian un fichaje ---- */
+  part('sobran en su posición',()=>{
+    /* Dead capital, named. "Why is he for sale" and "why did my money run out"
+       are the same question here: his line is full, so the points are
+       unreachable and the euros are frozen until somebody buys him. */
+    const so=(rep.listings||{}).listed||(rep.listings||{}).would_list||[];
+    const sob=so.filter(r=>r.sobra_en_su_posicion);
+    list($('surplus'),sob,r=>
+      '<div class="row"><span class="tag warn">sobra</span><div class="m">'
+      +'<b>'+esc(r.nombre)+'</b><small>su línea está llena — no puede alinear'
+      +', se pide por debajo de mercado para que salga</small></div>'
+      +'<div class="right">'+esc(short(r.price))+'</div></div>',
+      'Ningún jugador sobra en su posición.');
+  });
+
   part('ventas que financian un fichaje',()=>{
     list($('transfers'),rep.transfers,t=>
       '<div class="row"><span class="tag idle">'+esc('+'+Number(t.net_gain).toFixed(2))+'</span>'

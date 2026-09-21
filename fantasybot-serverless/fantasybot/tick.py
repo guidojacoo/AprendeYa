@@ -47,6 +47,11 @@ REVIEW_LOCK = "review"
 _SPENDING_PHASES = ("gap_signings", "listings", "bids", "clauses",
                     "clause_defense")
 
+# How long a listing has to show up on the market before its absence counts as a
+# refusal rather than as lag. Generous: calling a good listing refused is worse
+# than noticing a bad one an hour later.
+LISTING_GRACE_SECONDS = 900
+
 # How far past the biggest transfer the league has actually completed we still
 # treat a rival as able to reach. Somebody can always spend more than they ever
 # have — but not ten times more, and defending against a number nobody has come
@@ -387,6 +392,39 @@ def _execute_raise_clause(ctx, action):
             "paid": paid, "measured_ratio": measured, "response": resp}
 
 
+# The market, read ONCE per tick for listing purposes.
+#
+# `_execute_listing` used to read it twice per player: once to check he was not
+# already up, and again afterwards to confirm the listing landed. At two calls a
+# head that is 2.1 reads per listing — thirty-seven calls to put eighteen players
+# on the market, about fifty-six seconds of network against a budget that ends at
+# fifty. The queue therefore died half-drained every tick, and since LaLiga's
+# listings lapse daily it never caught up: the same few players went up each
+# morning and the rest never did.
+#
+# Cleared at the start of every tick by `run`, because a warm Vercel container
+# reuses the process and a snapshot that outlived its tick would decide the next
+# one's listings from stale data. Within a single tick the only thing that lists
+# OUR players is us, so adding each id as we go keeps it honest without
+# re-reading.
+_MARKET_IDS: dict = {}
+
+
+def _listed_now(client, lid):
+    """playerMaster ids currently on the market as somebody's squad player."""
+    if lid not in _MARKET_IDS:
+        _MARKET_IDS[lid] = {
+            str((r.get("playerMaster") or {}).get("id"))
+            for r in client.market(lid) or []
+            if r.get("discr") == "marketPlayerTeam"}
+    return _MARKET_IDS[lid]
+
+
+def forget_market():
+    """Drop the per-tick market snapshot. For tests."""
+    _MARKET_IDS.clear()
+
+
 @scheduler.executor(scheduler.LIST_SQUAD)
 def _execute_listing(ctx, action):
     """Put one player on the market at his reserve price."""
@@ -394,35 +432,35 @@ def _execute_listing(ctx, action):
     if ctx.dry_run or not config.AUTO_LIST:
         return {"status": "skipped", "reason": "listing is off"}
     client = ctx.get_client()
-    # Re-read before listing: another tick (or you, from the app) may have listed
-    # him already, and a second listing on the same player is at best noise.
-    already = {str((r.get("playerMaster") or {}).get("id"))
-               for r in client.market(p["league_id"]) or []
-               if r.get("discr") == "marketPlayerTeam"}
-    if str(p.get("player_id")) in already:
+    lid, pid = p["league_id"], str(p.get("player_id"))
+    # Another tick (or you, from the app) may have listed him already, and a
+    # second listing on the same player is at best noise. One shared snapshot
+    # answers that for every listing in this tick.
+    if pid in _listed_now(client, lid):
         return {"status": "already_listed", "nombre": p.get("nombre")}
-    resp = client.sell_player(p["league_id"], p["player_team_id"], int(p["price"]))
-    # Check that it took. The squad was reported listed at one moment and absent
-    # from the market five minutes later, and the difference between "LaLiga
-    # refused this" and "the listing expired" is invisible if the response is
-    # never read. A rejection here is quiet: the call returns, the action is
-    # marked done, and nobody is on the market.
-    landed = None
-    if not ctx.out_of_time(margin=4):
-        try:
-            landed = str(p.get("player_id")) in {
-                str((r.get("playerMaster") or {}).get("id"))
-                for r in client.market(p["league_id"]) or []
-                if r.get("discr") == "marketPlayerTeam"}
-        except Exception:                        # noqa: BLE001
-            landed = None            # could not check; do not claim either way
+    resp = client.sell_player(lid, p["player_team_id"], int(p["price"]))
+    # He is up as far as we know, so the snapshot says so for the rest of this
+    # tick without another call.
+    _listed_now(client, lid).add(pid)
+    # Whether it actually LANDED is checked against the next market read rather
+    # than by making one now. A silent refusal still gets caught — the review
+    # reads the market anyway, and an attempt that is not there by then is
+    # reported — but it costs nothing per player instead of a full read each.
+    # It also catches a listing that vanishes an hour later, which a check made
+    # four seconds after the call never could.
+    try:
+        store = get_storage()
+        attempts = store.get_doc("listing_attempts", {}) or {}
+        attempts[pid] = {"at": to_iso(utcnow()), "nombre": p.get("nombre"),
+                         "price": int(p["price"])}
+        store.put_doc("listing_attempts", attempts)
+    except Exception:                            # noqa: BLE001
+        pass          # bookkeeping; never fail a listing that went through
     events.emit("sell", f"En venta: {p.get('nombre')} a {int(p['price']):,} €",
-                detail={"reserve": p.get("price"), "value": p.get("value"),
-                        "confirmado": landed},
-                status="plan" if landed is not False else "error")
-    return {"status": "listed" if landed is not False else "refused",
-            "nombre": p.get("nombre"), "price": p.get("price"),
-            "confirmed": landed, "response": resp}
+                detail={"reserve": p.get("price"), "value": p.get("value")},
+                status="plan")
+    return {"status": "listed", "nombre": p.get("nombre"),
+            "price": p.get("price"), "response": resp}
 
 
 @scheduler.executor(REMINDER)
@@ -1465,6 +1503,50 @@ def _paid_by_id(lid, team):
         return {}
 
 
+def _reconcile_listings(store, market):
+    """Did the listings we sent actually land? Answered by a read we already made.
+
+    The executor no longer verifies each listing with its own market read — that
+    was the cost that stopped the queue draining. It records the attempt instead,
+    and this checks them all against the market the review reads anyway.
+
+    Strictly more informative than the old per-player check, which ran four
+    seconds after the call: a listing that LaLiga accepted and then dropped an
+    hour later was invisible to it and is caught here.
+
+    Attempts younger than the grace period are left alone — the row may simply
+    not have appeared yet.
+    """
+    attempts = store.get_doc("listing_attempts", {}) or {}
+    if not attempts:
+        return {}
+    live = {str((r.get("playerMaster") or {}).get("id"))
+            for r in market or [] if r.get("discr") == "marketPlayerTeam"}
+    now, refused, confirmed = utcnow(), [], 0
+    for pid, row in list(attempts.items()):
+        if pid in live:
+            attempts.pop(pid, None)
+            confirmed += 1
+            continue
+        at = parse_iso((row or {}).get("at"))
+        if at is None or (now - at).total_seconds() < LISTING_GRACE_SECONDS:
+            continue          # too early to call it a refusal
+        attempts.pop(pid, None)
+        refused.append({"player_id": pid, "nombre": (row or {}).get("nombre"),
+                        "price": (row or {}).get("price")})
+    store.put_doc("listing_attempts", attempts)
+    if refused:
+        events.emit("error",
+                    f"LaLiga no aceptó {len(refused)} anuncio(s)",
+                    detail={"jugadores": ", ".join(str(r.get("nombre"))
+                                                   for r in refused),
+                            "why": "se enviaron a vender y no aparecen en el "
+                                   "mercado"},
+                    status="error")
+    return {"confirmed": confirmed, "refused": refused,
+            "pending": len(attempts)}
+
+
 def _store_reserves(client, lid, team, best, sells, report=None):
     """Work out what each player is worth to us, and write it down.
 
@@ -1487,10 +1569,15 @@ def _store_reserves(client, lid, team, best, sells, report=None):
     # the listing phase asks for, or the bot lists a holding at its profit-taking
     # price and then judges the offer that meets it against the old premium —
     # refusing the very sale it advertised.
+    # The market read is already in hand, so answering "did yesterday's
+    # listings land" costs nothing extra here.
+    listing_check = _reconcile_listings(store, market)
     paid = _paid_by_id(lid, team)
     reserves = offers_mod.reserve_map(team, best, sells, listed_since=days,
                                       expected=expected, paid_by_id=paid)
     store.put_doc("reserves", reserves)
+    if listing_check.get("refused"):
+        store.put_doc("last_listing_refusals", listing_check["refused"])
     return market, days, expected, paid
 
 
@@ -1848,6 +1935,14 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
     it fails, because a tick that dies silently is a bot you cannot debug."""
     store = get_storage()
     started = time.monotonic()
+    # The market snapshot belongs to THIS tick, not to the process.
+    #
+    # Vercel reuses a warm container across invocations, so "a tick is a fresh
+    # process" is true on a cold start and false the rest of the time. A market
+    # read cached past the end of a tick would decide the next tick's listings
+    # from stale data — skipping players who had since lapsed off the market,
+    # which is the exact failure this cache was added to fix.
+    forget_market()
     ctx = TickContext(
         budget_seconds=budget_seconds or (config.SNIPER_BUDGET_SECONDS
                                           if mode == "sniper"

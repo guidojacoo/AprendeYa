@@ -8,9 +8,11 @@ until a full one came round. The asks were out there; nobody was reading the
 replies.
 """
 
+from datetime import timedelta
 from unittest import mock
 
 from fantasybot import config, tick
+from fantasybot.storage import get_storage, to_iso, utcnow
 from tests.support import StorageTestCase
 
 
@@ -109,22 +111,27 @@ class WhyNobodyGoesUp(StorageTestCase):
 class AListingThatDidNotTake(StorageTestCase):
     """The squad read as listed at one moment and absent from the market five
     minutes later. "LaLiga refused this" and "the listing expired" are different
-    problems, and they are indistinguishable if the response is never read."""
+    problems, and they are indistinguishable if nobody checks.
 
-    def _action(self):
+    The check used to be a second market read per listing, immediately after
+    the call. That cost 2.1 reads per player — about fifty-six seconds of
+    network to list eighteen of them, against a budget that ends at fifty — so
+    the queue died half-drained every tick and most of the squad never reached
+    the market at all.
+
+    So it is answered against the next market read instead, which the review
+    makes anyway. Same verdict, no per-player cost, and it also catches a
+    listing LaLiga accepted and then dropped an hour later — which a check made
+    four seconds after the call never could.
+    """
+
+    def _action(self, pid="m1"):
         return {"payload": {"league_id": "L1", "player_team_id": "pt1",
-                            "player_id": "m1", "nombre": "Uno",
+                            "player_id": pid, "nombre": "Uno",
                             "price": 3_000_000, "value": 2_600_000}}
 
     class _Client:
-        """The executor reads the market twice: once before, to avoid listing a
-        player who is already up, and once after, to check the listing took. The
-        double has to answer differently the second time or the first read sees
-        the outcome and the executor stands down before doing anything."""
-
-        def __init__(self, after, fail_second=False):
-            self.after = after
-            self.fail_second = fail_second
+        def __init__(self):
             self.sold = []
             self.reads = 0
 
@@ -134,36 +141,78 @@ class AListingThatDidNotTake(StorageTestCase):
 
         def market(self, lid):
             self.reads += 1
-            if self.reads == 1:
-                return []          # not on the market yet
-            if self.fail_second:
-                raise RuntimeError("market unavailable")
-            return self.after
+            return []
 
-    def _run(self, client):
+    def setUp(self):
+        super().setUp()
+        self.store = get_storage()
+        tick.forget_market()
+
+    def tearDown(self):
+        tick.forget_market()
+        super().tearDown()
+
+    def _list_one(self, pid="m1"):
+        client = self._Client()
         ctx = mock.Mock(dry_run=False)
         ctx.out_of_time.return_value = False
         ctx.get_client.return_value = client
         saved = config.AUTO_LIST
         config.AUTO_LIST = True
         try:
-            return tick._execute_listing(ctx, self._action())
+            return client, tick._execute_listing(ctx, self._action(pid))
         finally:
             config.AUTO_LIST = saved
 
-    def test_a_listing_that_appears_is_confirmed(self):
-        client = self._Client([{"discr": "marketPlayerTeam",
-                                "playerMaster": {"id": "m1"}}])
-        got = self._run(client)
+    def _listing(self, pid):
+        return {"discr": "marketPlayerTeam", "playerMaster": {"id": pid}}
+
+    def test_listing_one_player_costs_one_market_read(self):
+        """The whole point of the change."""
+        client, got = self._list_one()
         self.assertEqual(got["status"], "listed")
-        self.assertIs(got["confirmed"], True)
+        self.assertEqual(client.reads, 1)
+
+    def test_listing_ten_players_still_costs_one_market_read(self):
+        """A tick shares one snapshot; it used to be two calls a head."""
+        client = self._Client()
+        ctx = mock.Mock(dry_run=False)
+        ctx.out_of_time.return_value = False
+        ctx.get_client.return_value = client
+        saved = config.AUTO_LIST
+        config.AUTO_LIST = True
+        try:
+            for i in range(10):
+                tick._execute_listing(ctx, self._action(f"m{i}"))
+        finally:
+            config.AUTO_LIST = saved
+        self.assertEqual(client.reads, 1)
+        self.assertEqual(len(client.sold), 10)
+
+    def test_a_listing_that_appears_is_confirmed(self):
+        self._list_one()
+        got = tick._reconcile_listings(self.store, [self._listing("m1")])
+        self.assertEqual(got["confirmed"], 1)
+        self.assertEqual(got["refused"], [])
+        self.assertEqual(self.store.get_doc("listing_attempts", {}), {},
+                         "a settled attempt is not carried forever")
 
     def test_a_listing_that_does_not_appear_is_reported_refused(self):
-        got = self._run(self._Client([]))
-        self.assertEqual(got["status"], "refused")
-        self.assertIs(got["confirmed"], False)
+        self._list_one()
+        # Past the grace period: absent now means refused, not lagging.
+        old = to_iso(utcnow() - timedelta(seconds=tick.LISTING_GRACE_SECONDS + 60))
+        attempts = self.store.get_doc("listing_attempts", {})
+        attempts["m1"]["at"] = old
+        self.store.put_doc("listing_attempts", attempts)
+        got = tick._reconcile_listings(self.store, [])
+        self.assertEqual([r["nombre"] for r in got["refused"]], ["Uno"])
 
-    def test_a_check_that_could_not_run_claims_nothing(self):
-        got = self._run(self._Client([], fail_second=True))
-        self.assertEqual(got["status"], "listed")
-        self.assertIsNone(got["confirmed"], "unknown is not a verdict")
+    def test_a_listing_still_settling_is_not_called_refused(self):
+        """Absent one minute later is lag, not a refusal."""
+        self._list_one()
+        got = tick._reconcile_listings(self.store, [])
+        self.assertEqual(got["refused"], [])
+        self.assertEqual(got["pending"], 1, "still being watched")
+
+    def test_nothing_attempted_is_not_a_crash(self):
+        self.assertEqual(tick._reconcile_listings(self.store, []), {})

@@ -25,8 +25,8 @@ for code that decides when to part with a player.
 """
 
 from .. import modes
-from ..matching import num
-from .lineup import payload_ids
+from ..matching import num, position_of
+from .lineup import FORMATIONS, PREMIUM_FORMATIONS, payload_ids
 
 # Premium over market value required to part with a player, by how much we need him.
 XI_PREMIUM = 0.40          # a starter in the optimal XI
@@ -65,6 +65,60 @@ ACCEPT = "accept"
 DECLINE = "decline"
 
 
+# --- positional surplus -------------------------------------------------------
+# Ten defenders when a formation fields five.
+#
+# The pricing above asks what a player is worth to US, and answered it one
+# player at a time: a seventh defender has perfectly good expected points in
+# isolation, so he was "a bench player who is still an asset" at market value
+# plus fifteen per cent, and he sat there all season. He is not an asset. His
+# POSITION cannot field him — there is no arrangement of the other nine in which
+# he takes the pitch — so the points he might score are unreachable, and the
+# money in him is frozen.
+#
+# That is a property of the squad's shape, not of the player, and only a
+# position-wide view can see it.
+#
+# The ceilings come from the formation tables rather than from numbers typed
+# here, so they stay true if LaLiga changes them: the most any shape fields.
+# One spare per line on top, because an injury or a rotation needs cover and
+# selling down to exactly the eleven is its own kind of broken.
+SPARE_PER_LINE = 1
+
+
+def _max_fieldable(premium=False):
+    shapes = FORMATIONS + (PREMIUM_FORMATIONS if premium else [])
+    return {"POR": 1,
+            "DEF": max(d for d, _m, _f in shapes),
+            "MED": max(m for _d, m, _f in shapes),
+            "DEL": max(f for _d, _m, f in shapes)}
+
+
+def surplus_ids(team, expected=None, premium=False):
+    """playerMaster ids of players their own position can never field.
+
+    Ranked within each position by expected points, best first, so the ones cut
+    are the ones we would field last. Without `expected` the ranking falls back
+    to market value, which is a weaker proxy but never a crash.
+    """
+    ceiling = _max_fieldable(premium)
+    by_pos: dict = {}
+    for p in team.get("players") or []:
+        pm = p.get("playerMaster") or {}
+        pos = position_of(pm)
+        if pos is None or pos == "ENT":
+            continue          # a coach occupies no outfield slot
+        ptid = str(p.get("playerTeamId") or pm.get("id"))
+        rank = ((expected or {}).get(ptid), num(pm.get("marketValue")))
+        by_pos.setdefault(pos, []).append((rank, str(pm.get("id"))))
+    out = set()
+    for pos, rows in by_pos.items():
+        keep = ceiling.get(pos, 99) + SPARE_PER_LINE
+        rows.sort(key=lambda r: (r[0][0] is None, -(r[0][0] or 0), -r[0][1]))
+        out.update(pid for _rank, pid in rows[keep:])
+    return out
+
+
 def _market_value(player):
     """His price, as a number whatever LaLiga sent.
 
@@ -80,7 +134,7 @@ def _is_out_of_league(player):
     return (player.get("playerMaster") or {}).get("playerStatus") == "out_of_league"
 
 
-def premium_for(player, xi_ids, sell_ids, expected=None):
+def premium_for(player, xi_ids, sell_ids, expected=None, surplus=()):
     """How much over market value this player must fetch before we let him go.
 
     `expected` maps playerTeamId to his expected points per gameweek. Without it
@@ -107,6 +161,11 @@ def premium_for(player, xi_ids, sell_ids, expected=None):
         pts = expected.get(ptid)
         if pts is not None and pts < MIN_USEFUL_POINTS:
             return BENCH_DISCOUNT
+    # His position cannot field him, however good he looks on his own. Priced
+    # like the man who does not play, because in practice he is that man: the
+    # points are unreachable and the money is frozen until somebody buys him.
+    if str(pm.get("id")) in {str(i) for i in surplus}:
+        return BENCH_DISCOUNT
     if str(pm.get("id")) in {str(i) for i in sell_ids}:
         return SELLABLE_PREMIUM
     return SQUAD_PREMIUM * modes.knob("bench_premium")
@@ -163,7 +222,7 @@ def _in_xi(player, xi_ids):
 
 
 def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None,
-                  paid=None):
+                  paid=None, surplus=()):
     """The least we would accept — and therefore what we list him at."""
     value = _market_value(player)
     if not value:
@@ -176,7 +235,7 @@ def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None,
     # Time walks the price down for the players we want OUT, and leaves the
     # eleven where it is. Those are two different asks wearing the same shape.
     premium = decayed_premium(
-        premium_for(player, xi_ids, sell_ids, expected), days_listed,
+        premium_for(player, xi_ids, sell_ids, expected, surplus), days_listed,
         decays=not _in_xi(player, xi_ids))
     return max(0, round(value * (1 + premium)))
 
@@ -208,6 +267,7 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
     """
     xi_ids = payload_ids(best) if best else set()
     sell_ids = {s.get("player_id") for s in (sells or [])}
+    surplus = surplus_ids(team, expected)
     already = _listed_player_ids(market)
 
     out = []
@@ -219,7 +279,7 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
         days = (listed_since or {}).get(pid, 0)
         paid = (paid_by_id or {}).get(pid)
         price = reserve_price(p, xi_ids, sell_ids, days_listed=days,
-                              expected=expected, paid=paid)
+                              expected=expected, paid=paid, surplus=surplus)
         if price < min_price:
             continue      # not worth a listing slot
         out.append({
@@ -230,8 +290,10 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
             "value": _market_value(p),
             "price": price,
             "premium_pct": round(100 * decayed_premium(
-                premium_for(p, xi_ids, sell_ids, expected), days,
+                premium_for(p, xi_ids, sell_ids, expected, surplus), days,
                 decays=not _in_xi(p, xi_ids))),
+            # Why he is priced to leave: his line is full, not his form is bad.
+            "sobra_en_su_posicion": str(pm.get("id")) in surplus,
             "expected_points": (expected or {}).get(
                 str(p.get("playerTeamId") or pm.get("id"))),
             "days_listed": days,
@@ -286,6 +348,7 @@ def reserve_map(team, best=None, sells=None, listed_since=None,
     """
     xi_ids = payload_ids(best) if best else set()
     sell_ids = {s.get("player_id") for s in (sells or [])}
+    surplus = surplus_ids(team, expected)
     out = {}
     for p in team.get("players") or []:
         pid = (p.get("playerMaster") or {}).get("id")
@@ -293,7 +356,8 @@ def reserve_map(team, best=None, sells=None, listed_since=None,
             out[str(pid)] = reserve_price(
                 p, xi_ids, sell_ids,
                 days_listed=(listed_since or {}).get(str(pid), 0),
-                expected=expected, paid=(paid_by_id or {}).get(str(pid)))
+                expected=expected, paid=(paid_by_id or {}).get(str(pid)),
+                surplus=surplus)
     return out
 
 
