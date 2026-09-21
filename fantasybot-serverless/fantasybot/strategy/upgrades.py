@@ -141,6 +141,75 @@ def gain_from(team, pm, prob_index=None, fixture_difficulty=None, base=None,
     return round(now + UNAVAILABILITY * cover, 2)
 
 
+def freezes_capital(team, pm, expected=None, premium=False):
+    """What buying this player turns into dead money, and who.
+
+    `gain_from` measures what a signing ADDS to the eleven and is right about
+    it. What it cannot see is what the signing PUSHES OUT. Buying an eleventh
+    defender when a formation fields five does not merely fail to help — it
+    converts another defender into capital that can never score, and that cost
+    belongs to this decision.
+
+    Measured on the reported squad, this is not a hypothetical: an eleventh
+    defender scored a 1.60 gain against a fourth striker's 1.43, so the ranking
+    actively preferred the line that was already six players over its ceiling.
+    Ten defenders and three million euros is what that produces.
+
+    Returns (frozen_value, displaced_player) — the market value of the man who
+    newly falls outside what his line can field, and who he is. (0, None) when
+    the line has room, which is the ordinary case.
+    """
+    from .offers import SPARE_PER_LINE, _max_fieldable
+
+    pos = position_of(pm)
+    if pos is None or pos == "ENT":
+        return 0, None
+    keep = _max_fieldable(premium).get(pos, 99) + SPARE_PER_LINE
+    line = [p for p in (team.get("players") or [])
+            if position_of(p.get("playerMaster")) == pos]
+    if len(line) < keep:
+        return 0, None          # room in the line: nothing is pushed out
+
+    def _rank(p):
+        """Best first. Expected points if we have them, scoring record if not.
+
+        The fallback matters more than it looks. Ranking a full line by MARKET
+        VALUE would make an expensive player who scores nothing outrank the
+        squad — so an overpriced dud would appear to displace somebody good
+        instead of being the one who does not fit, and the charge would land on
+        the wrong player. Price is what the market thinks; points are what the
+        line is for.
+        """
+        m = p.get("playerMaster") or {}
+        ptid = str(p.get("playerTeamId") or m.get("id"))
+        pts = (expected or {}).get(ptid)
+        if pts is None:
+            pts = num(m.get("averagePoints"), None)
+        return (pts is None, -(pts or 0), -num(m.get("marketValue")))
+
+    # Who is NEWLY frozen, which is not the same as who is outside the window.
+    #
+    # With ten defenders and room for six, four are already dead capital before
+    # we buy anybody; the eleventh signing makes it five. So the cost of this
+    # purchase is the one player who crosses the line because of it — the last
+    # man once the newcomer is ranked in — and not the best of the players who
+    # were already stranded, who is what the first version charged.
+    #
+    # Ranking the newcomer with the rest rather than assuming he is the best is
+    # what keeps this honest for a mediocre signing: if HE ends up last, the
+    # frozen capital is his own price, which is exactly right.
+    arriving = {"playerTeamId": None, "playerMaster": pm}
+    order = sorted(line + [arriving], key=_rank)
+    loser = order[-1]
+    lm = loser.get("playerMaster") or {}
+    return int(num(lm.get("marketValue"))), {
+        "player_id": lm.get("id"),
+        "player_team_id": loser.get("playerTeamId"),
+        "nombre": lm.get("nickname") or lm.get("name"),
+        "value": int(num(lm.get("marketValue"))),
+        "es_el_que_ficho": loser is arriving}
+
+
 def players_by_id(market):
     """{playerMaster id: the card}, for scoring a candidate in our own XI.
 
@@ -157,7 +226,7 @@ def players_by_id(market):
 
 
 def rank(ops, team, cards=None, money=None, prob_index=None,
-         fixture_difficulty=None, limit=None, form_index=None):
+         fixture_difficulty=None, limit=None, form_index=None, expected=None):
     """Every candidate, ranked by the points he adds to the XI per euro.
 
     `ops` are market rows already evaluated by strategy.flip — they carry the
@@ -183,10 +252,22 @@ def rank(ops, team, cards=None, money=None, prob_index=None,
             continue
         gain = gain_from(team, pm, prob_index, fixture_difficulty, base=base,
                          form_index=form_index)
+        # A signing costs its price PLUS whatever it freezes. Buying into a
+        # line that is already full converts somebody into capital that can
+        # never score, and charging the purchase for it is the difference
+        # between rotating a squad and hoarding one.
+        frozen, displaced = freezes_capital(team, pm, expected)
+        committed = price + frozen
         out.append({
             **op,
             "gain": gain,
             "gain_per_million": round(gain / max(1.0, price / 1_000_000.0), 3),
+            # Ranked on this: points per euro actually tied up, not per euro
+            # handed over. They are the same number until a line is full.
+            "gain_per_million_neto": round(
+                gain / max(1.0, committed / 1_000_000.0), 3),
+            "congela": frozen,
+            "desplaza": displaced,
             "affordable": money is None or price <= int(num(money)),
             "pos": op.get("pos") or position_of(pm, "?"),
         })
@@ -195,10 +276,10 @@ def rank(ops, team, cards=None, money=None, prob_index=None,
     # by the profit it expects to take out of them instead.
     if modes.knob("rank_by") == "margin":
         out.sort(key=lambda r: (-(r.get("margin_pct") or 0),
-                                -r["gain_per_million"],
+                                -r["gain_per_million_neto"],
                                 r.get("buy_price") or 0))
     else:
-        out.sort(key=lambda r: (-r["gain_per_million"], -r["gain"],
+        out.sort(key=lambda r: (-r["gain_per_million_neto"], -r["gain"],
                                 r.get("buy_price") or 0))
     return out[:limit] if limit else out
 

@@ -613,7 +613,14 @@ function render(d){
       '<div class="row"><span class="tag '+(u.affordable?'ok':'warn')+'">'
       +esc('+'+Number(u.gain).toFixed(2))+'</span>'
       +'<div class="m"><b>'+esc(u.nombre)+'</b> '+esc(u.pos||'')
-      +'<small>'+esc(u.gain_per_million)+' pts por millón'
+      +'<small>'+esc(u.gain_per_million_neto!==undefined
+          ?u.gain_per_million_neto:u.gain_per_million)+' pts por millón'
+      /* What the signing freezes, if anything. A line that is already full
+         does not just fail to improve: buying into it turns somebody into
+         money that can never score, and that is part of the price. */
+      +(u.congela?' · congela '+esc(short(u.congela))
+        +((u.desplaza||{}).nombre?' ('+esc(u.desplaza.nombre)+' deja de caber)':'')
+        :'')
       +(u.affordable?'':' · no alcanza la caja')+'</small></div>'
       +'<div class="right">'+esc(short(u.buy_price))+'</div></div>',
       'Ningún fichaje del mercado mejoraría el once ahora mismo.');
