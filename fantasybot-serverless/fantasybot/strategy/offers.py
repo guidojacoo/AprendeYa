@@ -112,14 +112,22 @@ def premium_for(player, xi_ids, sell_ids, expected=None):
     return SQUAD_PREMIUM * modes.knob("bench_premium")
 
 
-def decayed_premium(premium, days_listed):
+def decayed_premium(premium, days_listed, decays=True):
     """The premium after `days_listed` days without a taker.
 
     Only positive premiums decay. The out-of-league discount is not an asking
     price we are being stubborn about — it is a judgement that the player is
     losing value, and waiting should make us MORE willing to sell, not less.
+
+    `decays=False` holds the price where it is, and the eleven uses it. A
+    starter's premium is not stubbornness that time should wear down: it is the
+    fact that he is worth more to us in the team than his market value is in the
+    bank, and that does not become less true because a week passed with no
+    offer. Letting it decay would mean "nobody bid, so eventually I will let my
+    best player go at par", which is backwards — and it only became reachable
+    once the clock was fixed, because before that no premium decayed at all.
     """
-    if premium <= 0 or not days_listed or days_listed <= STALE_AFTER_DAYS:
+    if not decays or premium <= 0 or not days_listed or days_listed <= STALE_AFTER_DAYS:
         return premium
     stale_days = days_listed - STALE_AFTER_DAYS
     return max(0.0, premium - premium * PREMIUM_DECAY_PER_DAY * stale_days)
@@ -148,6 +156,12 @@ def take_profit(player, xi_ids, paid):
     return bool(value) and value >= num(paid) * (1 + target)
 
 
+def _in_xi(player, xi_ids):
+    pm = player.get("playerMaster") or {}
+    ptid = str(player.get("playerTeamId") or pm.get("id"))
+    return ptid in {str(i) for i in xi_ids}
+
+
 def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None,
                   paid=None):
     """The least we would accept — and therefore what we list him at."""
@@ -159,8 +173,11 @@ def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None,
     # few per cent is how a taken profit turns back into a holding.
     if take_profit(player, xi_ids, paid):
         return max(0, round(value))
+    # Time walks the price down for the players we want OUT, and leaves the
+    # eleven where it is. Those are two different asks wearing the same shape.
     premium = decayed_premium(
-        premium_for(player, xi_ids, sell_ids, expected), days_listed)
+        premium_for(player, xi_ids, sell_ids, expected), days_listed,
+        decays=not _in_xi(player, xi_ids))
     return max(0, round(value * (1 + premium)))
 
 
@@ -213,7 +230,8 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
             "value": _market_value(p),
             "price": price,
             "premium_pct": round(100 * decayed_premium(
-                premium_for(p, xi_ids, sell_ids, expected), days)),
+                premium_for(p, xi_ids, sell_ids, expected), days,
+                decays=not _in_xi(p, xi_ids))),
             "expected_points": (expected or {}).get(
                 str(p.get("playerTeamId") or pm.get("id"))),
             "days_listed": days,

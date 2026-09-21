@@ -13,6 +13,8 @@ a backup who would score 0.4 on the weeks he plays.
 
 from datetime import timedelta
 
+from unittest import mock
+
 from fantasybot import config, scheduler, state, tick
 from fantasybot.scheduler import TickContext
 from fantasybot.storage import to_iso, utcnow
@@ -101,7 +103,12 @@ class GapSignings(StorageTestCase):
                 "POR": [self._cand(max_bid=8_000_000)],
                 "DEL": [self._cand(market_id="mk2", nombre="Delantero",
                                    max_bid=8_000_000)]}}}
-        res = tick._plan_gap_signings(ctx, "L1", {"teamMoney": 10_000_000}, report)
+        # The floor is pinned out of the way: this is about two gaps sharing
+        # ONE budget, not about the reserve. Before the floor existed it was
+        # zero and quietly made the same choice.
+        with mock.patch.object(tick.modes, "cash_floor", lambda: 0):
+            res = tick._plan_gap_signings(ctx, "L1",
+                                          {"teamMoney": 10_000_000}, report)
         self.assertEqual(len(res["queued"]), 1,
                          "the second gap must not spend money the first took")
         self.assertEqual(res["committed"], 8_000_000)

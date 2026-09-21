@@ -255,12 +255,12 @@ def _execute_clause(ctx, action):
                 "share_limit": int(money * config.MAX_CLAUSE_SHARE),
                 "reason": f"{current:,} is over {config.MAX_CLAUSE_SHARE:.0%} "
                           f"of a {money:,} balance"}
-    if money - current < config.CASH_RESERVE:
+    if money - current < modes.cash_floor():
         return {"status": "insufficient_funds", "nombre": nombre,
                 "clause": current, "money": money,
-                "reserve": config.CASH_RESERVE,
+                "reserve": modes.cash_floor(),
                 "reason": f"{current:,} would leave less than the "
-                          f"{config.CASH_RESERVE:,} reserve"}
+                          f"{modes.cash_floor():,} reserve"}
 
     resp = client.pay_buyout_clause(lid, player_id, current)
     events.emit("clause", f"COMPRADO {nombre} por cláusula: {current:,} €",
@@ -356,7 +356,7 @@ def _execute_raise_clause(ctx, action):
 
     ratio = _clause_cost_ratio()
     cost = clausedef.cost_of(before_clause, target, ratio)
-    if cost > before_money - config.CASH_RESERVE:
+    if cost > before_money - modes.cash_floor():
         return {"status": "too_expensive", "nombre": p.get("nombre"),
                 "cost": cost, "money": before_money}
 
@@ -762,7 +762,7 @@ def _plan_bids(ctx, client, lid, team, report):
                  "margin_pct": r.get("margin_pct"), "gain": r.get("gain"),
                  "gain_per_million": r.get("gain_per_million")}
                 for r in upgrades_mod.best_plan(ranked, budget,
-                                                reserve=config.CASH_RESERVE)]
+                                                reserve=modes.cash_floor())]
         funnel["entran en la caja"] = len(plan)
     else:
         plan = execute_mod.plan_bids(client, lid, team)
@@ -897,7 +897,7 @@ def _plan_gap_signings(ctx, lid, team, report):
         return {"mode": "off", "queued": [], "committed": 0,
                 "gaps": list(gaps)}
 
-    budget = max(0, int(num(team.get("teamMoney"))) - config.CASH_RESERVE)
+    budget = max(0, int(num(team.get("teamMoney"))) - modes.cash_floor())
     queued, skipped, committed = [], [], 0
     for pos in gaps:
         # Every candidate that clears the bar, then the best POINTS PER EURO
@@ -981,7 +981,7 @@ def _plan_clauses(ctx, lid, team, report):
     kickoff = ((report.get("matchday") or {}).get("kickoff")
                if isinstance(report.get("matchday"), dict) else None)
     money = int(num(team.get("teamMoney")))
-    spendable = max(0, money - config.CASH_RESERVE)
+    spendable = max(0, money - modes.cash_floor())
     if config.MAX_CLAUSE:
         spendable = min(spendable, config.MAX_CLAUSE)
     # The fence that does not go stale. One player may never take more than this
@@ -1083,7 +1083,7 @@ def _plan_clause_defense(ctx, lid, team, report):
     got = clausedef.plan(team, reach, num(team.get("teamMoney")),
                          report.get("points_at_risk") or {},
                          cost_ratio=_clause_cost_ratio(),
-                         reserve=config.CASH_RESERVE)
+                         reserve=modes.cash_floor())
     # What the reach was built from. A single number is not enough to tell a
     # rich league from one manager whose history we have misread, and that
     # distinction decides whether the whole squad looks reachable.
@@ -1152,16 +1152,32 @@ def _days_listed(store, team, market):
              for p in team.get("players") or []}
     since = store.get_doc("listed_since", {}) or {}
     now, out = utcnow(), {}
-    for pid in squad & listed:
-        first = parse_iso(since.get(pid))
-        if first is None:
-            since[pid] = to_iso(now)
-            first = now
-        out[pid] = (now - first).total_seconds() / 86400
-    # Forget anyone no longer listed (sold, or we pulled him): his clock restarts.
+
+    # The clock survives a lapsed listing, and this is the whole point.
+    #
+    # LaLiga's market closes every day, so a player we are still trying to sell
+    # is ABSENT from the market for part of every single day — the listing
+    # phase re-posts him each morning, as its own idempotency key says. The
+    # previous version forgot the clock for anyone not on the market at that
+    # instant, so every re-listing started again at day zero.
+    #
+    # `days_listed` therefore never once got past zero, the premium never
+    # decayed, and the asking price sat at value +15% forever. Nobody pays that,
+    # so nothing sold, so the bank only ever drained. Six simulated days of the
+    # real cycle asked 5,750,000 on day one and 5,750,000 on day six.
+    #
+    # What the clock is actually measuring is "how long have we been trying to
+    # sell this player", and that is not interrupted by the market closing
+    # overnight. Only leaving the squad ends it: sold, or taken by a clause.
     for pid in list(since):
-        if pid not in out:
+        if pid not in squad:
             since.pop(pid, None)
+    for pid in squad & listed:
+        since.setdefault(pid, to_iso(now))
+    for pid, first_iso in since.items():
+        first = parse_iso(first_iso)
+        if first is not None:
+            out[pid] = max(0.0, (now - first).total_seconds() / 86400)
     store.put_doc("listed_since", since)
     return out
 

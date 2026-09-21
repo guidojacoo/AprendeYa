@@ -13,7 +13,7 @@ notifications are built on top (see README / next steps).
 
 from datetime import date, datetime, timedelta
 
-from . import cache, config, state
+from . import cache, config, modes, state
 from .matching import match_name, num, position_of
 from .strategy import captain as captain_mod
 from .strategy import flip, needs as needs_mod, sell as sell_mod
@@ -625,7 +625,7 @@ def review(client, days_to_matchday=None):
         # move nothing else here could even express.
         "rebuild": depth.rebuild(
             team, upgrade_list, upgrades.players_by_id(raw_market), sell_costs,
-            money=num(team["teamMoney"]), reserve=config.CASH_RESERVE,
+            money=num(team["teamMoney"]), reserve=modes.cash_floor(),
             prob_index=prob_index, fixture_difficulty=fixture_difficulty,
             form_index=form_index),
         "leaks": depth.leaks(best),

@@ -454,6 +454,8 @@ function render(d){
          +' · paga hasta '+esc(Math.round((md2.knobs.bid_ceiling||1)*100))+'% del precio'
          +' · una cláusula puede llevarse el '
          +esc(Math.round((md2.knobs.clause_share||0)*100))+'% de la caja'
+         +(md2.knobs.cash_floor?' · nunca baja de '
+            +esc(short(md2.knobs.cash_floor))+' en caja':'')
          +(md2.knobs.flip_target?' · vende al +'
             +esc(Math.round(md2.knobs.flip_target*100))+'% de lo que pagó':'')
          +'</small></div></div>':'');

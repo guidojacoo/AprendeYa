@@ -10,6 +10,7 @@ A skipped clause costs nothing. An over-paid one cannot be undone.
 """
 
 from datetime import timedelta
+from unittest import mock
 
 from fantasybot import config, scheduler, tick
 from fantasybot.scheduler import TickContext
@@ -195,9 +196,29 @@ class Planning(StorageTestCase):
         self.assertEqual(self._plan(self._target())["queued"], [])
 
     def test_the_allowance_never_exceeds_what_we_can_afford(self):
-        self._plan(self._target(clause=10_000_000), money=17_000_000)
+        """The SHARE rule, isolated from the floor.
+
+        Both fences apply to a real plan; this one is about the share, so the
+        floor is pinned out of the way rather than silently deciding the
+        outcome. Before the floor existed it was zero and did so invisibly.
+        """
+        with mock.patch.object(tick.modes, "cash_floor", lambda: 0):
+            self._plan(self._target(clause=10_000_000), money=17_000_000)
         self.assertEqual(self.store.pending_actions()[0]["payload"]["max_pay"],
                          int(17_000_000 * config.MAX_CLAUSE_SHARE))
+
+    def test_the_floor_is_never_spent_through(self):
+        """The fence that actually bounds a SEQUENCE of clauses.
+
+        `clause_share` is a share of what is LEFT, so it cannot bound one: at
+        60% each payment leaves 40%, and four of them take eighty million to
+        two. That is what drained the account, and only an absolute number
+        stops it.
+        """
+        with mock.patch.object(tick.modes, "cash_floor", lambda: 10_000_000):
+            res = self._plan(self._target(clause=9_000_000), money=12_000_000)
+        self.assertEqual(res["queued"], [],
+                         "9M would leave 3M, under the 10M floor")
 
     def test_one_player_cannot_take_most_of_the_bank(self):
         """A euro ceiling set in August is meaningless by November, so the real

@@ -60,6 +60,17 @@ MODES = {
         "bid_ceiling": 1.0,
         # The most of the bank one buyout clause may take.
         "clause_share": 0.60,
+        # Cash that is never spent, in euros.
+        #
+        # This existed as FANTASYBOT_CASH_RESERVE and defaulted to ZERO, which
+        # meant the only fence on spending was `clause_share` — a share of
+        # whatever is LEFT. That is not a floor: at 60% each clause leaves 40%,
+        # so four of them take eighty million down to two. Which is exactly what
+        # happened, while the selling side was broken and nothing came back in.
+        #
+        # A share cannot bound a sequence. Only an absolute number can, and its
+        # job is concrete: always be able to answer the next market close.
+        "cash_floor": 10_000_000,
     },
     "dinero": {
         "label": "Hacer caja",
@@ -80,6 +91,10 @@ MODES = {
         # A clause costs roughly 1.67x market value. That is a terrible entry
         # price for a trade, so this mode may barely use them.
         "clause_share": 0.30,
+        # Trading wants its capital working, not idle — but a trader with no
+        # cash cannot take the next opportunity either, which is the whole game
+        # here.
+        "cash_floor": 5_000_000,
     },
     "puntos": {
         "label": "Todo a puntos",
@@ -97,6 +112,9 @@ MODES = {
         "bid_ceiling": 1.20,
         # One extraordinary player can be most of the bank.
         "clause_share": 0.85,
+        # Spend aggressively, but never literally broke: an account at zero
+        # cannot bid at a close, and missing the close costs the whole player.
+        "cash_floor": 3_000_000,
     },
 }
 
@@ -130,6 +148,16 @@ def active():
             pass          # storage down: play the default, do not crash
         _ACTIVE = name
     return _ACTIVE
+
+
+def cash_floor():
+    """Cash the bot may never spend, in euros.
+
+    The configured reserve wins when it is higher: the mode provides a sane
+    floor, the env var is how you raise it, and neither can lower the other.
+    """
+    from . import config
+    return max(int(config.CASH_RESERVE or 0), int(knob("cash_floor") or 0))
 
 
 def knob(name, default=None):
