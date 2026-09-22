@@ -608,6 +608,10 @@ function render(d){
     list($('offers'),rows,([o,cls,label])=>
       '<div class="row"><span class="tag '+cls+'">'+label+'</span><div class="m"><b>'
       +esc(o.nombre)+'</b><small>'+esc(o.reason||'')+(o.in_xi?' · titular':'')
+      /* Quién puso la plata: la oferta diaria del propio mercado de LaLiga es
+         el canal por el que de verdad se vende en una liga de amigos, y se ve
+         distinto de la puja de un rival. */
+      +(o.de_laliga!==undefined?(o.de_laliga?' · oferta de LaLiga':' · oferta de un rival'):'')
       +'</small></div><div class="right">'+esc(short(o.amount))+'</div></div>',
       off.status==='skipped'?('Sin evaluar: '+esc(off.reason||'')):'Nadie ofertó todavía.');
     $('c-mercado').textContent=rows.length?rows.length:'';

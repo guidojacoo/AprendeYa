@@ -109,7 +109,8 @@ class TheDashboardRenders(unittest.TestCase):
                                "summary": {"ok": True, "duration_seconds": 12,
                                            "actions": []}},
             "offers": {"accepted": [{"nombre": "A", "amount": 1, "action": "accept",
-                                     "why": "sube", "reason": "r"}],
+                                     "why": "sube", "reason": "r",
+                                     "de_laliga": True}],
                        "declined": [], "skipped": []},
             "report": {
                 "money": 44_000_000, "xi_points": 51.2,

@@ -54,13 +54,6 @@ MIN_USEFUL_POINTS = 1.0
 # Below this, a listing is not worth the slot.
 MIN_LISTING_PRICE = 100_000
 
-# A price nobody meets is a price that is wrong. After a grace period, an unsold
-# listing gives back some of its premium each day, so the reserve walks down
-# towards what the market will actually pay — but never below market value,
-# because selling an asset at a discount is a different decision entirely.
-STALE_AFTER_DAYS = 2
-PREMIUM_DECAY_PER_DAY = 0.25   # a quarter of the ORIGINAL premium, per day
-
 ACCEPT = "accept"
 DECLINE = "decline"
 
@@ -171,27 +164,6 @@ def premium_for(player, xi_ids, sell_ids, expected=None, surplus=()):
     return SQUAD_PREMIUM * modes.knob("bench_premium")
 
 
-def decayed_premium(premium, days_listed, decays=True):
-    """The premium after `days_listed` days without a taker.
-
-    Only positive premiums decay. The out-of-league discount is not an asking
-    price we are being stubborn about — it is a judgement that the player is
-    losing value, and waiting should make us MORE willing to sell, not less.
-
-    `decays=False` holds the price where it is, and the eleven uses it. A
-    starter's premium is not stubbornness that time should wear down: it is the
-    fact that he is worth more to us in the team than his market value is in the
-    bank, and that does not become less true because a week passed with no
-    offer. Letting it decay would mean "nobody bid, so eventually I will let my
-    best player go at par", which is backwards — and it only became reachable
-    once the clock was fixed, because before that no premium decayed at all.
-    """
-    if not decays or premium <= 0 or not days_listed or days_listed <= STALE_AFTER_DAYS:
-        return premium
-    stale_days = days_listed - STALE_AFTER_DAYS
-    return max(0.0, premium - premium * PREMIUM_DECAY_PER_DAY * stale_days)
-
-
 def take_profit(player, xi_ids, paid):
     """Whether this holding has run far enough to cash in.
 
@@ -221,9 +193,37 @@ def _in_xi(player, xi_ids):
     return ptid in {str(i) for i in xi_ids}
 
 
+# The ask for a player we are willing to move, as a share of his market value.
+#
+# The reserve is a THRESHOLD, not a price we receive: `accept_offer` is called
+# with the offered amount, so a lower reserve never earns us less — it only
+# decides yes or no. Asking a premium from a player we want gone therefore buys
+# nothing and costs the sale.
+#
+# And the buyer is LaLiga. The market makes a standing offer on every listing
+# roughly once a day, often above market value, and in a league of friends that
+# is the only reliable bid there is. A bench player asked at value +15% against
+# a buyer who offers +10% is a player who never sells, all season, for the sake
+# of a premium we would not have collected anyway.
+#
+# So anyone outside the eleven is asked market value, and we take whatever
+# LaLiga puts on the table above it. The eleven keeps its premium: nobody is
+# selling a starter to the market for par.
+MOVABLE_ASK = 1.0
+
+
 def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None,
                   paid=None, surplus=()):
-    """The least we would accept — and therefore what we list him at."""
+    """The least we would accept — and therefore what we list him at.
+
+    `days_listed` is accepted and no longer changes the price. It used to drive
+    a premium that decayed over unsold days — a fix for the same underlying
+    problem MOVABLE_ASK now solves directly and from day one, which makes
+    waiting for a decay redundant: a non-XI player already asks no more than
+    market value on the day he is listed, so there is nothing left to walk
+    down. Kept as a parameter because callers report it on the page (how long
+    a listing has sat), which is still useful information on its own.
+    """
     value = _market_value(player)
     if not value:
         return 0
@@ -232,11 +232,13 @@ def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None,
     # few per cent is how a taken profit turns back into a holding.
     if take_profit(player, xi_ids, paid):
         return max(0, round(value))
-    # Time walks the price down for the players we want OUT, and leaves the
-    # eleven where it is. Those are two different asks wearing the same shape.
-    premium = decayed_premium(
-        premium_for(player, xi_ids, sell_ids, expected, surplus), days_listed,
-        decays=not _in_xi(player, xi_ids))
+    premium = premium_for(player, xi_ids, sell_ids, expected, surplus)
+    # Outside the eleven, never ask more than the market pays. See MOVABLE_ASK:
+    # the threshold does not change what we collect, so a premium here is a
+    # refusal dressed up as a price. The eleven keeps whatever premium_for gave
+    # it — a starter is never discounted just because nobody has bid yet.
+    if not _in_xi(player, xi_ids):
+        premium = min(premium, MOVABLE_ASK - 1.0)
     return max(0, round(value * (1 + premium)))
 
 
@@ -289,9 +291,8 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
             "nombre": pm.get("nickname") or pm.get("name"),
             "value": _market_value(p),
             "price": price,
-            "premium_pct": round(100 * decayed_premium(
-                premium_for(p, xi_ids, sell_ids, expected, surplus), days,
-                decays=not _in_xi(p, xi_ids))),
+            "premium_pct": round(100 * (
+                (price / _market_value(p) - 1.0) if _market_value(p) else 0)),
             # Why he is priced to leave: his line is full, not his form is bad.
             "sobra_en_su_posicion": str(pm.get("id")) in surplus,
             "expected_points": (expected or {}).get(
@@ -307,6 +308,36 @@ def plan_listings(team, market, best=None, sells=None, min_price=MIN_LISTING_PRI
         })
     out.sort(key=lambda r: -r["value"])
     return out
+
+
+# Fields that identify a HUMAN bidder on an offer. LaLiga's own standing offer
+# carries none of them — it is not a manager — so their absence is what marks
+# an offer as coming from the market itself.
+_BIDDER_KEYS = ("user", "userId", "manager", "managerId", "team", "teamId",
+                "buyerTeam", "sellerTeam", "userTeam")
+
+
+def is_system_offer(raw):
+    """True when LaLiga itself is the bidder, not a league manager.
+
+    The market makes a standing offer on every listed player roughly once a
+    day, often ABOVE his market value, and that — not a rival's bid — is how a
+    player in this league actually sells. Nothing here knew that channel
+    existed.
+
+    Decided by the ABSENCE of a bidder rather than by a magic id, because an id
+    would be a guess about an undocumented API and an absence is observable. A
+    payload that does name its bidder is treated as human, which is the safe
+    way round: mistaking a rival for the system would price our squad against
+    the wrong buyer.
+    """
+    if not isinstance(raw, dict):
+        return False
+    for key in _BIDDER_KEYS:
+        got = raw.get(key)
+        if got not in (None, "", 0, "0", {}, []):
+            return False
+    return True
 
 
 def _offers_on(row):
@@ -332,7 +363,8 @@ def _offers_on(row):
         if oid is None or money is None:
             continue
         try:
-            out.append({"id": oid, "money": int(money)})
+            out.append({"id": oid, "money": int(money),
+                        "de_laliga": is_system_offer(o)})
         except (TypeError, ValueError):
             continue
     return out
@@ -465,6 +497,12 @@ def evaluate_offers(team, market, best=None, sells=None, reserves=None):
                 "reserve": reserve,
                 "in_xi": str(player.get("playerTeamId") or pm.get("id")) in
                          {str(i2) for i2 in xi_ids},
+                # Who is paying. LaLiga's own standing offer, roughly once a
+                # day and often above value, is the main channel a player in
+                # this league actually sells through — worth knowing apart
+                # from a rival manager's bid, which behaves completely
+                # differently.
+                "de_laliga": offer.get("de_laliga", False),
                 "reason": (f"{offer['money']:,} >= reserve {reserve:,}" if good
                            else (f"{offer['money']:,} < reserve {reserve:,}"
                                  if i == 0 else

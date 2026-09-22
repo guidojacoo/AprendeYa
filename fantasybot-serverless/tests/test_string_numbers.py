@@ -45,8 +45,12 @@ class Num(unittest.TestCase):
 
 class Selling(unittest.TestCase):
     def test_a_reserve_price_can_be_computed_at_all(self):
+        """The bug was a crash on the string, not the exact number: a squad
+        player outside the eleven now asks market value itself (see
+        MOVABLE_ASK) rather than a premium over it, so the assertion is that
+        this returns a real positive price and not that it raised."""
         price = offers.reserve_price(player(), set(), set())
-        self.assertGreater(price, 2_683_751, "a squad player asks above value")
+        self.assertEqual(price, 2_683_751)
 
     def test_the_whole_squad_goes_on_the_market(self):
         """The bug, end to end: fifteen players, none listed, and the planner

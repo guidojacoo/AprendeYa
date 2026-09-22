@@ -40,8 +40,11 @@ class ReservePrice(unittest.TestCase):
         p = player(ptid="pt-1")
         self.assertEqual(offers.reserve_price(p, {"pt-1"}, set()), 14_000_000)
 
-    def test_a_bench_player_still_sells_at_a_profit(self):
-        self.assertEqual(offers.reserve_price(player(), set(), set()), 11_500_000)
+    def test_a_bench_player_is_asked_at_market_value_not_a_premium(self):
+        """The reserve is a THRESHOLD; `accept_offer` pays the offered amount,
+        not the reserve. A premium on a player we want to move buys nothing and
+        only costs the sale — see MOVABLE_ASK."""
+        self.assertEqual(offers.reserve_price(player(), set(), set()), 10_000_000)
 
     def test_a_flagged_sell_target_goes_at_market_value(self):
         self.assertEqual(offers.reserve_price(player(), set(), {"p1"}), 10_000_000)
@@ -69,7 +72,7 @@ class PlanListings(unittest.TestCase):
         by_id = {r["player_id"]: r for r in plan}
         self.assertEqual(by_id["p1"]["price"], 14_000_000)
         self.assertTrue(by_id["p1"]["in_xi"])
-        self.assertEqual(by_id["p2"]["price"], 11_500_000)
+        self.assertEqual(by_id["p2"]["price"], 10_000_000)
 
     def test_already_listed_players_are_not_listed_again(self):
         team = {"players": [player("p1"), player("p2")]}
@@ -98,15 +101,15 @@ class EvaluateOffers(unittest.TestCase):
         return offers.evaluate_offers(team, market, best=best)[0]
 
     def test_an_offer_at_the_reserve_is_accepted(self):
-        d = self._decide(11_500_000)
+        d = self._decide(10_000_000)
         self.assertEqual(d["action"], offers.ACCEPT)
         self.assertEqual(d["offer_id"], "o1")
 
     def test_an_offer_one_euro_short_is_declined(self):
-        self.assertEqual(self._decide(11_499_999)["action"], offers.DECLINE)
+        self.assertEqual(self._decide(9_999_999)["action"], offers.DECLINE)
 
     def test_a_starter_is_not_sold_at_a_bench_price(self):
-        self.assertEqual(self._decide(11_500_000, in_xi=True)["action"],
+        self.assertEqual(self._decide(10_000_000, in_xi=True)["action"],
                          offers.DECLINE)
 
     def test_a_starter_goes_for_a_real_premium(self):
@@ -166,7 +169,7 @@ class ReserveMap(unittest.TestCase):
     def test_it_prices_the_whole_squad(self):
         team = {"players": [player("p1", "pt-1"), player("p2", "pt-2")]}
         got = offers.reserve_map(team, best=best_xi("pt-1"))
-        self.assertEqual(got, {"p1": 14_000_000, "p2": 11_500_000})
+        self.assertEqual(got, {"p1": 14_000_000, "p2": 10_000_000})
 
     def test_a_cached_reserve_wins_over_recomputing(self):
         """The cached number was priced against a freshly optimised XI; this tick

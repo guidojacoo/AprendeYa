@@ -14,10 +14,19 @@ again at day zero, `days_listed` never got past it, and the ask sat at value
 +15% forever. Six simulated days asked 5,750,000 on day one and 5,750,000 on day
 six.
 
-Fixing the clock alone would have been worse than the bug: the decay runs to
-zero, so the bot would have started offering its own STARTERS at par. So the
-premium on the eleven no longer decays at all — a starter's price is not
-stubbornness that time should wear down.
+Fixing the clock alone would have been worse than the bug it was aimed at: a
+naive fix walks EVERY premium to zero over time, including the eleven's, so the
+bot would answer a quiet week by offering its own starters at par.
+
+That first fix (a premium that decayed towards zero over unsold days) was
+superseded within the same session by a more direct one once it became clear
+WHY nothing was selling: LaLiga's own market makes a standing offer on every
+listing roughly once a day, and `accept_offer` is paid the OFFERED amount, not
+the reserve — so the reserve is a threshold, never a price we collect. A
+non-eleven player now asks exactly market value from the day he is listed
+(`MOVABLE_ASK`), which makes "wait for it to decay" redundant: there is nothing
+left to walk down. The eleven still never discounts, whatever `days_listed`
+says — a starter's price is not stubbornness that time should wear down.
 """
 
 from datetime import timedelta
@@ -77,27 +86,30 @@ class TheClockSurvivesTheMarketClosing(StorageTestCase):
         self.assertEqual(self._run(4, True).get("b1"), 0.0)
 
 
-class ThePriceActuallyComesDown(StorageTestCase):
-    def test_a_bench_player_reaches_market_value(self):
+class ThePriceIsAtMarketValueFromDayOne(StorageTestCase):
+    """MOVABLE_ASK, not decay: there is nothing left to walk down."""
+
+    def test_a_bench_player_asks_market_value_immediately(self):
         p = _p("b1")
-        day0 = offers.reserve_price(p, [], [], days_listed=0)
-        day6 = offers.reserve_price(p, [], [], days_listed=6)
-        self.assertEqual(day0, 5_750_000)
-        self.assertEqual(day6, 5_000_000, "at par he finally sells")
-        self.assertLess(day6, day0)
+        self.assertEqual(offers.reserve_price(p, [], [], days_listed=0),
+                         5_000_000)
+
+    def test_days_listed_no_longer_changes_the_ask(self):
+        """The parameter is still accepted (for the page's own reporting) but
+        no longer drives the price — MOVABLE_ASK already puts him at market
+        value on day zero, so there is nothing for time to walk down."""
+        p = _p("b1")
+        self.assertEqual(offers.reserve_price(p, [], [], days_listed=0),
+                         offers.reserve_price(p, [], [], days_listed=60))
 
     def test_it_never_goes_below_market_value(self):
-        """Walking down to par is patience; below it is a different decision."""
         p = _p("b1")
         self.assertEqual(offers.reserve_price(p, [], [], days_listed=60),
                          5_000_000)
 
-    def test_a_starter_is_never_walked_down(self):
-        """Fixing the clock made this reachable for the first time.
-
-        The decay runs to zero, so without this the bot would answer a quiet
-        week by offering its own eleven at par.
-        """
+    def test_a_starter_is_never_discounted(self):
+        """The eleven keeps its premium whatever days_listed says — a starter's
+        price is not stubbornness that time should wear down."""
         p = _p("s1")
         self.assertEqual(offers.reserve_price(p, ["s1"], [], days_listed=0),
                          offers.reserve_price(p, ["s1"], [], days_listed=30))
