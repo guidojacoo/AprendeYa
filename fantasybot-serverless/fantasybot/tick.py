@@ -1418,9 +1418,15 @@ def handle_offers(ctx):
         _reconcile_listings(store, market)
     except Exception:                            # noqa: BLE001
         pass          # bookkeeping never breaks the offer handling
+    # What our own listings look like coming back. "Nobody sold" has three
+    # causes that render identically — nothing of ours is up, our listings are
+    # up and nobody bid, or offers exist and we are not reading them — and only
+    # the third is a bug. This is what tells them apart.
+    shape = offers_mod.inspect_our_listings(market, reserves=reserves)
+    store.put_doc("listing_shape", shape)
     decisions = offers_mod.evaluate_offers(None, market, reserves=reserves)
     if not decisions:
-        return {"status": "ok", "offers": 0}
+        return {"status": "ok", "offers": 0, "listings_seen": shape}
 
     accepted, declined, skipped = [], [], []
     for d in decisions:
@@ -1924,6 +1930,9 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         # Which posture every decision below was taken under. Without it the
         # page explains WHAT the bot did and never why it was willing to.
         "mode": modes.describe(),
+        # Evidence for the one question the page could never answer: are we on
+        # the market at all, and is anybody bidding?
+        "listing_shape": get_storage().get_doc("listing_shape", {}) or {},
         "xi_points": lu.get("total"),
         "lineup_changed": bool(lu.get("changed")),
         "lineup_result": lineup_res,

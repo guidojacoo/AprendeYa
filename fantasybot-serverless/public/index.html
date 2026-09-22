@@ -246,6 +246,11 @@
       <section><h2>Todo el mercado, puntuado</h2>
         <div class="note">Tocá un jugador para ver el razonamiento.</div>
         <div class="scroll" id="market"></div></section>
+      <section><h2>¿Por qué no vendió?</h2>
+        <div class="note">Tres causas distintas que hasta ahora se veían
+          iguales: no hay nada tuyo publicado, está publicado y nadie ofertó,
+          o hay ofertas y no las estamos leyendo. Solo la tercera es un bug.</div>
+        <div id="sell-health"></div></section>
       <section><h2>Ofertas recibidas</h2><div id="offers"></div></section>
       <section><h2>Estado de la plantilla</h2><div id="squadstate"></div></section>
       <section><h2>Qué no llegó a hacer</h2><div id="shortfall"></div></section>
@@ -559,6 +564,42 @@ function render(d){
   });
 
   /* ---- mercado ---- */
+  part('por qué no vendió',()=>{
+    /* The three causes, separated by evidence rather than by guesswork. The
+       last row is the one that matters: if none of our listing rows ever
+       carried an offers key, bids do not travel with this payload and the
+       handler is reading the wrong place — which looks exactly like a quiet
+       market and is not one. */
+    const sh=rep.listing_shape||null;
+    const box=$('sell-health');
+    if(!sh||sh.anuncios_nuestros===undefined){
+      box.innerHTML='<div class="empty">Sin datos todavía — esperá un tick.</div>';
+      return;
+    }
+    const n=sh.anuncios_nuestros||0, con=sh.con_ofertas||0,
+          tot=sh.ofertas_totales||0, keys=sh.claves_de_oferta_vistas||[];
+    const row=(cls,tag,txt,sub)=>
+      '<div class="row"><span class="tag '+cls+'">'+esc(tag)+'</span>'
+      +'<div class="m">'+esc(txt)+(sub?'<small>'+esc(sub)+'</small>':'')
+      +'</div></div>';
+    let out=row(n?'ok':'bad', String(n), 'anuncios tuyos en el mercado',
+                n?'':'no hay nada publicado: el problema es la publicación, no la venta');
+    if(n){
+      out+=row(tot?'ok':'warn', String(tot), 'ofertas recibidas en total',
+               tot?(con+' jugador(es) con oferta')
+                  :'publicado y nadie ofertó todavía');
+      if(!tot)
+        out+=row(keys.length?'warn':'bad',
+                 keys.length?keys.join(' '):'ninguna',
+                 'claves de oferta en el payload',
+                 keys.length
+                   ?'LaLiga sí manda ofertas por acá; simplemente no hay'
+                   :'NINGÚN anuncio trajo una clave de ofertas — puede que no '
+                    +'viajen en este endpoint y las estemos leyendo mal');
+    }
+    box.innerHTML=out;
+  });
+
   part('mercado',()=>{
     const off=d.offers||{};
     const rows=[...(off.accepted||[]).map(o=>[o,'ok','VENDIDO']),

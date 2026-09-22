@@ -361,6 +361,57 @@ def reserve_map(team, best=None, sells=None, listed_since=None,
     return out
 
 
+def inspect_our_listings(market, reserves=None, team=None):
+    """What our own listings actually look like coming back from LaLiga.
+
+    "Nobody sold" has three completely different causes that render
+    identically: nothing of ours is on the market, our listings are there and
+    nobody bid, or offers exist and we are not reading them. The third is a bug
+    and the other two are not, and until this existed there was no way to tell
+    them apart — the offer handler simply found no offers and said nothing.
+
+    The offer path assumes every bid arrives embedded in the market row, under
+    `offers` or `offer`. Nothing ever checked that assumption against a real
+    payload. If LaLiga puts them somewhere else, every listing reads as "no
+    offers" forever, in silence, which is exactly what a season of never selling
+    looks like.
+
+    So this records what came back: how many of our listings there are, which
+    keys they carry, and how many carried an offers structure of any kind.
+    Cheap, and it turns a guess into a reading.
+    """
+    ours = set(reserves or {}) | {
+        str((p.get("playerMaster") or {}).get("id"))
+        for p in (team or {}).get("players") or []}
+    mine, with_offers, offer_keys, row_keys = 0, 0, set(), set()
+    total_offers = 0
+    for row in market or []:
+        if row.get("discr") != "marketPlayerTeam":
+            continue
+        pm = row.get("playerMaster") or {}
+        if ours and str(pm.get("id")) not in ours:
+            continue
+        mine += 1
+        row_keys.update(k for k in row if not k.startswith("_"))
+        found = _offers_on(row)
+        if found:
+            with_offers += 1
+            total_offers += len(found)
+        for key in ("offers", "offer", "bids", "bid", "offersReceived"):
+            if row.get(key) is not None:
+                offer_keys.add(key)
+    return {
+        "anuncios_nuestros": mine,
+        "con_ofertas": with_offers,
+        "ofertas_totales": total_offers,
+        # The keys LaLiga actually sends on our own listing rows. If none of the
+        # offer-shaped names appear on any of them, offers do not travel with
+        # this payload and the handler is reading the wrong place.
+        "claves_de_oferta_vistas": sorted(offer_keys),
+        "claves_de_la_fila": sorted(row_keys)[:40],
+    }
+
+
 def evaluate_offers(team, market, best=None, sells=None, reserves=None):
     """Decide every open offer on our listed players.
 

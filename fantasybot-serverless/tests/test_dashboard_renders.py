@@ -82,6 +82,21 @@ class TheDashboardRenders(unittest.TestCase):
         self._render({"ok": True, "now": "2026-09-18T10:00:00+00:00",
                       "report": {"money": 1}})
 
+    def test_the_sell_health_box_with_no_offers_channel(self):
+        """The suspicious case: listed, no bids, and no offer key anywhere."""
+        self._render({"ok": True, "now": "2026-09-22T10:00:00+00:00",
+                      "report": {"listing_shape": {
+                          "anuncios_nuestros": 5, "con_ofertas": 0,
+                          "ofertas_totales": 0, "claves_de_oferta_vistas": [],
+                          "claves_de_la_fila": ["id"]}}})
+
+    def test_the_sell_health_box_with_nothing_listed(self):
+        self._render({"ok": True, "now": "2026-09-22T10:00:00+00:00",
+                      "report": {"listing_shape": {
+                          "anuncios_nuestros": 0, "con_ofertas": 0,
+                          "ofertas_totales": 0, "claves_de_oferta_vistas": [],
+                          "claves_de_la_fila": []}}})
+
     def test_a_full_report(self):
         """Every section with something in it."""
         self._render({
@@ -106,6 +121,10 @@ class TheDashboardRenders(unittest.TestCase):
                                    "clause_share": 0.30,
                                    "cash_floor": 5_000_000}},
                 "market_census": {"total": 12, "system": 8},
+                "listing_shape": {"anuncios_nuestros": 3, "con_ofertas": 1,
+                                  "ofertas_totales": 2,
+                                  "claves_de_oferta_vistas": ["offers"],
+                                  "claves_de_la_fila": ["id", "salePrice"]},
                 "market": [{"nombre": "A", "score": 70, "verdict": "comprar",
                             "headline": "h", "reasons": ["r"],
                             "ultimas_jornadas": [4, 6], "media_reciente": 5.0,
