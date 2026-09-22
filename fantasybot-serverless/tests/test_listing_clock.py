@@ -89,10 +89,14 @@ class TheClockSurvivesTheMarketClosing(StorageTestCase):
 class ThePriceIsAtMarketValueFromDayOne(StorageTestCase):
     """MOVABLE_ASK, not decay: there is nothing left to walk down."""
 
-    def test_a_bench_player_asks_market_value_immediately(self):
+    def test_a_bench_player_asks_essentially_market_value_immediately(self):
+        """Not EXACTLY market value: see SALE_FLOOR_CUSHION_PCT — LaLiga
+        refuses a listing at or below the live value outright, so the floor
+        sits a hair above it."""
         p = _p("b1")
-        self.assertEqual(offers.reserve_price(p, [], [], days_listed=0),
-                         5_000_000)
+        price = offers.reserve_price(p, [], [], days_listed=0)
+        self.assertGreater(price, 5_000_000)
+        self.assertLess(price, 5_000_000 * 1.02)
 
     def test_days_listed_no_longer_changes_the_ask(self):
         """The parameter is still accepted (for the page's own reporting) but
@@ -104,8 +108,8 @@ class ThePriceIsAtMarketValueFromDayOne(StorageTestCase):
 
     def test_it_never_goes_below_market_value(self):
         p = _p("b1")
-        self.assertEqual(offers.reserve_price(p, [], [], days_listed=60),
-                         5_000_000)
+        self.assertGreaterEqual(offers.reserve_price(p, [], [], days_listed=60),
+                                5_000_000)
 
     def test_a_starter_is_never_discounted(self):
         """The eleven keeps its premium whatever days_listed says — a starter's
@@ -115,19 +119,29 @@ class ThePriceIsAtMarketValueFromDayOne(StorageTestCase):
                          offers.reserve_price(p, ["s1"], [], days_listed=30))
 
     def test_the_premium_the_page_reports_matches_the_price_charged(self):
-        """A reported premium that disagrees with the ask is a lie on screen."""
+        """A reported premium that disagrees with the ask is a lie on screen.
+
+        `premium_pct` is an INTEGER percentage for display, and no integer
+        percentage reconstructs an arbitrary price to the exact euro — so
+        this checks the two agree to within a rounding euro or two, not
+        bit-for-bit. What it must never see again is the gap that motivated
+        it: a price a full half a point off what the rounded number implies.
+        """
         team = {"teamMoney": 0, "players": [_p("s1"), _p("b1")]}
         rows = offers.plan_listings(team, [], best=None, sells=[],
                                     listed_since={"s1": 30, "b1": 30})
         for row in rows:
             expected = round(row["value"] * (1 + row["premium_pct"] / 100))
-            self.assertEqual(row["price"], expected, row["nombre"])
+            self.assertLessEqual(abs(row["price"] - expected), 2, row["nombre"])
 
-    def test_an_out_of_league_player_is_not_walked_UP(self):
+    def test_an_out_of_league_player_still_meets_the_sale_floor(self):
+        """DUMP_DISCOUNT still marks him to prioritise leaving, but the
+        SUBMITTED price obeys the same floor as everybody else — the discount
+        never reaches LaLiga as an actual below-value ask."""
         p = _p("x1")
         p["playerMaster"]["playerStatus"] = "out_of_league"
-        self.assertLess(offers.reserve_price(p, [], [], days_listed=30),
-                        5_000_000)
+        self.assertGreaterEqual(offers.reserve_price(p, [], [], days_listed=30),
+                                5_000_000)
 
 
 class TheListedSinceDocumentStaysBounded(StorageTestCase):

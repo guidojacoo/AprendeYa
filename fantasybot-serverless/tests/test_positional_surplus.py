@@ -86,15 +86,19 @@ class SurplusIsPricedToLeave(StorageTestCase):
         return next(p for p in self.team["players"]
                     if p["playerMaster"]["id"] == pid)
 
-    def test_a_surplus_defender_is_asked_UNDER_market_value(self):
-        """The bug, in one assertion: he used to be asked +15%."""
+    def test_a_surplus_defender_is_marked_below_market_value(self):
+        """The bug, half of it: he used to be asked +15%. `premium_for` still
+        marks him below value — that is the priority signal — but the actual
+        SUBMITTED price cannot go below value at all (LaLiga refuses that
+        outright), so `reserve_price` floors it at value plus the same small
+        technical cushion every listing carries."""
         p = self._player("DEF9")
         self.assertLess(offers.premium_for(p, [], [], self.expected,
                                            self.surplus), 0)
-        self.assertLess(
-            offers.reserve_price(p, [], [], expected=self.expected,
-                                 surplus=self.surplus),
-            5_000_000)
+        price = offers.reserve_price(p, [], [], expected=self.expected,
+                                     surplus=self.surplus)
+        self.assertGreaterEqual(price, 5_000_000)
+        self.assertLess(price, 5_000_000 * 1.02)
 
     def test_a_needed_defender_keeps_his_premium(self):
         p = self._player("DEF0")

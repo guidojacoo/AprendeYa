@@ -8,6 +8,14 @@ so the listings never sold and the money stayed locked in them.
 A man who does not play is not an asset. He is cash we have not collected, and
 the reasoning is the one DUMP_DISCOUNT already applied to a player who left the
 league: waiting does not make him worth more.
+
+`premium_for` still marks him with a NEGATIVE premium — he is still the one to
+prioritise selling. What that premium can no longer do is push the actual
+LISTED PRICE below market value: live evidence showed LaLiga refuses that
+outright with 400 `030.01.02`, the sale-side sibling of the bid floor. So
+`reserve_price` floors every player at value plus a small cushion (see
+SALE_FLOOR_CUSHION_PCT); the discount is real for RANKING and PRIORITY, never
+for the number actually submitted.
 """
 
 from fantasybot.strategy import offers
@@ -33,10 +41,13 @@ class APlayerWhoDoesNotPlayIsPricedToLeave(StorageTestCase):
         self.assertEqual(got, offers.BENCH_DISCOUNT)
         self.assertLess(got, 0, "a premium is what kept him unsold")
 
-    def test_the_reserve_lands_below_market_value(self):
+    def test_the_reserve_never_lands_below_market_value(self):
+        """The bug that follows this one: LaLiga refuses a listing below
+        value outright (400, 030.01.02). The discount marks him to prioritise;
+        it may not push the submitted price under the floor."""
         price = offers.reserve_price(self.bench, set(), set(),
                                      expected={"pt-1": 0.4})
-        self.assertLess(price, 700_000)
+        self.assertGreaterEqual(price, 700_000)
 
     def test_without_the_signal_nothing_changes(self):
         """No expected points means judge him as before, not dump him."""
@@ -66,7 +77,8 @@ class APlayerWhoDoesNotPlayIsPricedToLeave(StorageTestCase):
         team = {"players": [self.bench]}
         plan = offers.plan_listings(team, [], expected={"pt-1": 0.4})
         self.assertEqual(plan[0]["expected_points"], 0.4)
-        self.assertLess(plan[0]["premium_pct"], 0)
+        self.assertGreaterEqual(plan[0]["premium_pct"], 0,
+                                "the floor wins; the discount cannot go below it")
 
 
 class TheThresholdIsAboutPlayingNotAboutBeingGood(StorageTestCase):

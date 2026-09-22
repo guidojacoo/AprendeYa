@@ -13,8 +13,13 @@ player at market value plus fifteen per cent bought nothing: LaLiga's own
 standing offer usually lands somewhere near value, sometimes above it and
 sometimes not quite there, and the fifteen per cent premium simply declined
 the offers in between for no extra euro ever collected. A player outside the
-eleven now asks market value and nothing more (MOVABLE_ASK), so the daily
-system offer clears far more often.
+eleven now asks essentially market value (MOVABLE_ASK), so the daily system
+offer clears far more often — "essentially", not exactly: shipping this
+against the real API immediately produced a wall of 400s, `"<price>" is not a
+valid sale price quantity for this player` (030.01.02), the sale-side sibling
+of the well-known bid floor. LaLiga will not accept a listing at or under the
+live value at all, so every ask now carries a small technical floor above it
+(SALE_FLOOR_CUSHION_PCT) on top of whatever this file already covers.
 
 And the offers themselves needed a name. LaLiga's standing offer carries no
 bidder — no user, no manager, no team — because it is not one; a rival's bid
@@ -79,13 +84,20 @@ class TheReserveIsAThresholdNotAPrice(StorageTestCase):
     """MOVABLE_ASK: `accept_offer` pays the offered amount, so a bench premium
     only ever costs a sale, never earns one."""
 
-    def test_a_bench_player_asks_exactly_market_value(self):
-        self.assertEqual(offers.reserve_price(_p("b1"), [], []), 10_000_000)
+    def test_a_bench_player_asks_essentially_market_value(self):
+        """Not exactly: see the sale floor (SALE_FLOOR_CUSHION_PCT) in
+        offers.py — a small technical cushion above value, not a business
+        premium; asking exactly value turned out to be a 400 in production."""
+        price = offers.reserve_price(_p("b1"), [], [])
+        self.assertGreaterEqual(price, 10_000_000)
+        self.assertLess(price, 10_000_000 * 1.02)
 
-    def test_the_daily_system_offer_at_value_now_clears(self):
-        """Value + 15% would have declined this; value clears it exactly."""
+    def test_the_daily_system_offer_above_value_now_clears(self):
+        """Value + 15% would have declined this; a system offer with real
+        room above value clears it — which is the case the user described
+        ("muchas veces es mas del valor del jugador")."""
         team = {"players": [_p("p1")]}
-        market = [_row("p1", [{"id": "o1", "money": 10_000_000}])]
+        market = [_row("p1", [{"id": "o1", "money": 10_500_000}])]
         got = offers.evaluate_offers(team, market)[0]
         self.assertEqual(got["action"], offers.ACCEPT)
 

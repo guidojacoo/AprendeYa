@@ -178,18 +178,22 @@ class TakingTheProfit(StorageTestCase):
         modes.set_mode("dinero")
         held = _p("h1", 4, 3, value=15_000_000)
         price = offers.reserve_price(held, [], [], paid=10_000_000)
-        self.assertEqual(price, 15_000_000,
-                         "at target it is asked at market, with no premium")
+        self.assertLess(price, 15_000_000 * 1.02,
+                        "at target it is asked at market, with no extra premium"
+                        " on top of the technical sale floor")
+        self.assertGreaterEqual(price, 15_000_000)
 
     def test_a_holding_that_has_not_run_is_asked_at_market_not_above(self):
-        """He is not for sale at a premium either way: below target he simply
-        is not being cashed in early, and MOVABLE_ASK means a non-eleven
-        player never asks more than market value regardless — asking above it
-        would only cost the sale for no extra euro collected."""
+        """He is not for sale at a business premium either way: below target
+        he simply is not being cashed in early, and MOVABLE_ASK means a
+        non-eleven player never asks more than market value — plus the same
+        small technical sale floor every listing carries (see
+        SALE_FLOOR_CUSHION_PCT), never a real markup on top of it."""
         modes.set_mode("dinero")
         held = _p("h1", 4, 3, value=11_000_000)
-        self.assertEqual(offers.reserve_price(held, [], [], paid=10_000_000),
-                         11_000_000)
+        price = offers.reserve_price(held, [], [], paid=10_000_000)
+        self.assertGreaterEqual(price, 11_000_000)
+        self.assertLess(price, 11_000_000 * 1.02)
 
     def test_a_starter_is_never_cashed_in(self):
         modes.set_mode("dinero")

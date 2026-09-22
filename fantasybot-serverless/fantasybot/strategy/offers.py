@@ -211,10 +211,40 @@ def _in_xi(player, xi_ids):
 # selling a starter to the market for par.
 MOVABLE_ASK = 1.0
 
+# There IS a floor, and it is not optional — this is the sibling of the bid
+# floor. Live evidence, the day this shipped: every listing at or below market
+# value came back 400 `"<price>" is not a valid sale price quantity for this
+# player` (030.01.02) — the same family as a bid under value being refused with
+# 030.01.01. LaLiga will not let a listing ask less than the player is worth,
+# whatever this bot's own reasoning for wanting him gone.
+#
+# So BENCH_DISCOUNT and DUMP_DISCOUNT no longer reach the price: they still
+# mark a player as one to prioritise (nothing else reads `premium_for`'s
+# return value), but the number submitted to LaLiga is floored here,
+# unconditionally, for every player.
+#
+# The floor sits a hair ABOVE value rather than exactly on it, for the same
+# reason a bid never targets value exactly: `marketValue` is revalued through
+# the day (see bidding.py's `_current_value`), so a price computed at review
+# time and submitted moments — or, if the review ran long, up to an hour —
+# later can already be stale-low by the time it lands. A cushion this small
+# costs nothing against a system offer the user reports often lands ABOVE
+# value; it only has to survive ordinary intraday drift, not a rival
+# auction. 1%, not something smaller: the page rounds a premium to the
+# nearest whole per cent for display, and a cushion landing exactly on a
+# rounding tie (0.5%) can DISPLAY as "0%" next to a price that is not —
+# the number on screen would quietly disagree with itself.
+SALE_FLOOR_CUSHION_PCT = 0.01       # 1%
+
 
 def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None,
                   paid=None, surplus=()):
     """The least we would accept — and therefore what we list him at.
+
+    Never below `value * (1 + SALE_FLOOR_CUSHION_PCT)`: see the floor comment
+    above. Every branch below computes what we would LIKE to ask; the actual
+    return is clamped to the floor as the very last step, so nothing upstream
+    has to remember to respect it.
 
     `days_listed` is accepted and no longer changes the price. It used to drive
     a premium that decayed over unsold days — a fix for the same underlying
@@ -227,11 +257,12 @@ def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None,
     value = _market_value(player)
     if not value:
         return 0
+    floor = max(0, round(value * (1 + SALE_FLOOR_CUSHION_PCT)))
     # A holding that hit its target is priced to LEAVE, at market, with no
     # premium on top. The decision was "take the profit"; haggling over the last
     # few per cent is how a taken profit turns back into a holding.
     if take_profit(player, xi_ids, paid):
-        return max(0, round(value))
+        return floor
     premium = premium_for(player, xi_ids, sell_ids, expected, surplus)
     # Outside the eleven, never ask more than the market pays. See MOVABLE_ASK:
     # the threshold does not change what we collect, so a premium here is a
@@ -239,7 +270,7 @@ def reserve_price(player, xi_ids, sell_ids, days_listed=0, expected=None,
     # it — a starter is never discounted just because nobody has bid yet.
     if not _in_xi(player, xi_ids):
         premium = min(premium, MOVABLE_ASK - 1.0)
-    return max(0, round(value * (1 + premium)))
+    return max(floor, round(value * (1 + premium)))
 
 
 def _listed_player_ids(market):

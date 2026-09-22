@@ -40,23 +40,41 @@ class ReservePrice(unittest.TestCase):
         p = player(ptid="pt-1")
         self.assertEqual(offers.reserve_price(p, {"pt-1"}, set()), 14_000_000)
 
-    def test_a_bench_player_is_asked_at_market_value_not_a_premium(self):
+    def test_a_bench_player_is_asked_at_essentially_market_value(self):
         """The reserve is a THRESHOLD; `accept_offer` pays the offered amount,
-        not the reserve. A premium on a player we want to move buys nothing and
-        only costs the sale — see MOVABLE_ASK."""
-        self.assertEqual(offers.reserve_price(player(), set(), set()), 10_000_000)
+        not the reserve. A business premium on a player we want to move buys
+        nothing and only costs the sale — see MOVABLE_ASK. Not EXACTLY market
+        value either: LaLiga refuses a listing at or below the live value
+        outright, so every ask carries the same small technical floor above it
+        (SALE_FLOOR_CUSHION_PCT) whatever premium_for decided."""
+        price = offers.reserve_price(player(), set(), set())
+        self.assertGreaterEqual(price, 10_000_000)
+        self.assertLess(price, 10_000_000 * 1.02)
 
-    def test_a_flagged_sell_target_goes_at_market_value(self):
-        self.assertEqual(offers.reserve_price(player(), set(), {"p1"}), 10_000_000)
+    def test_a_flagged_sell_target_goes_at_essentially_market_value(self):
+        price = offers.reserve_price(player(), set(), {"p1"})
+        self.assertGreaterEqual(price, 10_000_000)
+        self.assertLess(price, 10_000_000 * 1.02)
 
-    def test_a_player_out_of_the_league_is_dumped_at_a_discount(self):
-        """His value is collapsing — holding out for a premium loses money."""
+    def test_a_player_out_of_the_league_is_marked_for_a_discount(self):
+        """His value is collapsing, and premium_for still says so — but the
+        discount can no longer reach the SUBMITTED price (LaLiga refuses a
+        listing below value outright), so it only decides priority now, not
+        the number sent."""
         p = player(status="out_of_league")
-        self.assertEqual(offers.reserve_price(p, {"pt-p1"}, set()), 7_000_000)
+        self.assertEqual(offers.premium_for(p, {"pt-p1"}, set()),
+                         offers.DUMP_DISCOUNT)
+        price = offers.reserve_price(p, {"pt-p1"}, set())
+        self.assertGreaterEqual(price, 10_000_000)
+        self.assertLess(price, 10_000_000 * 1.02)
 
     def test_out_of_league_beats_being_a_starter(self):
+        """DUMP_DISCOUNT is checked before the XI branch — he is not asked the
+        starter's 40% premium just because the optimiser still lists him."""
         p = player(ptid="pt-1", status="out_of_league")
-        self.assertEqual(offers.reserve_price(p, {"pt-1"}, set()), 7_000_000)
+        self.assertEqual(offers.premium_for(p, {"pt-1"}, set()),
+                         offers.DUMP_DISCOUNT)
+        self.assertLess(offers.reserve_price(p, {"pt-1"}, set()), 14_000_000)
 
     def test_a_valueless_player_has_no_reserve(self):
         self.assertEqual(offers.reserve_price(player(value=0), set(), set()), 0)
@@ -72,7 +90,8 @@ class PlanListings(unittest.TestCase):
         by_id = {r["player_id"]: r for r in plan}
         self.assertEqual(by_id["p1"]["price"], 14_000_000)
         self.assertTrue(by_id["p1"]["in_xi"])
-        self.assertEqual(by_id["p2"]["price"], 10_000_000)
+        self.assertGreaterEqual(by_id["p2"]["price"], 10_000_000)
+        self.assertLess(by_id["p2"]["price"], 10_000_000 * 1.02)
 
     def test_already_listed_players_are_not_listed_again(self):
         team = {"players": [player("p1"), player("p2")]}
@@ -101,15 +120,20 @@ class EvaluateOffers(unittest.TestCase):
         return offers.evaluate_offers(team, market, best=best)[0]
 
     def test_an_offer_at_the_reserve_is_accepted(self):
-        d = self._decide(10_000_000)
+        # The reserve itself, not a hardcoded number: it now includes the
+        # technical sale floor (SALE_FLOOR_CUSHION_PCT) on top of value.
+        reserve = offers.reserve_price(player("p1", "pt-1"), set(), set())
+        d = self._decide(reserve)
         self.assertEqual(d["action"], offers.ACCEPT)
         self.assertEqual(d["offer_id"], "o1")
 
     def test_an_offer_one_euro_short_is_declined(self):
-        self.assertEqual(self._decide(9_999_999)["action"], offers.DECLINE)
+        reserve = offers.reserve_price(player("p1", "pt-1"), set(), set())
+        self.assertEqual(self._decide(reserve - 1)["action"], offers.DECLINE)
 
     def test_a_starter_is_not_sold_at_a_bench_price(self):
-        self.assertEqual(self._decide(10_000_000, in_xi=True)["action"],
+        reserve = offers.reserve_price(player("p1", "pt-1"), set(), set())
+        self.assertEqual(self._decide(reserve, in_xi=True)["action"],
                          offers.DECLINE)
 
     def test_a_starter_goes_for_a_real_premium(self):
@@ -169,7 +193,9 @@ class ReserveMap(unittest.TestCase):
     def test_it_prices_the_whole_squad(self):
         team = {"players": [player("p1", "pt-1"), player("p2", "pt-2")]}
         got = offers.reserve_map(team, best=best_xi("pt-1"))
-        self.assertEqual(got, {"p1": 14_000_000, "p2": 10_000_000})
+        self.assertEqual(got["p1"], 14_000_000)
+        self.assertGreaterEqual(got["p2"], 10_000_000)
+        self.assertLess(got["p2"], 10_000_000 * 1.02)
 
     def test_a_cached_reserve_wins_over_recomputing(self):
         """The cached number was priced against a freshly optimised XI; this tick
