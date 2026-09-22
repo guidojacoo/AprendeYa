@@ -52,6 +52,20 @@ _SPENDING_PHASES = ("gap_signings", "listings", "bids", "clauses",
 # than noticing a bad one an hour later.
 LISTING_GRACE_SECONDS = 900
 
+# Past this age an attempt is INCONCLUSIVE, never a refusal.
+#
+# Absence from the market means "LaLiga refused it" only while the listing
+# would still be running. Judge it an hour later and a listing that was
+# genuinely live and then lapsed — the normal end of every listing — reads
+# exactly like a rejection, and the backoff then benches a player who did
+# nothing wrong. Reconciliation runs on every tick, so the verdict is reached
+# minutes after the call and this ceiling is never a constraint in practice.
+LISTING_VERDICT_MAX_SECONDS = 2700        # 45 min
+
+# Longest we wait before trying a repeatedly refused listing again. Doubling
+# from two hours, this is reached after about four consecutive refusals.
+LISTING_BACKOFF_MAX_HOURS = 12
+
 # How far past the biggest transfer the league has actually completed we still
 # treat a rival as able to reach. Somebody can always spend more than they ever
 # have — but not ten times more, and defending against a number nobody has come
@@ -1395,8 +1409,16 @@ def handle_offers(ctx):
     # The squad is read from the cached reserves, not from a fresh team() call:
     # the reserves ARE the list of our players, and a market read alone is enough
     # to see the offers. One request per tick instead of three.
-    decisions = offers_mod.evaluate_offers(None, client.market(lid),
-                                           reserves=reserves)
+    market = client.market(lid)
+    # Free: the read is already here, and reconciling every tick rather than
+    # every review is what keeps a verdict minutes old instead of an hour old —
+    # which is the difference between spotting a refusal and mistaking a lapsed
+    # listing for one.
+    try:
+        _reconcile_listings(store, market)
+    except Exception:                            # noqa: BLE001
+        pass          # bookkeeping never breaks the offer handling
+    decisions = offers_mod.evaluate_offers(None, market, reserves=reserves)
     if not decisions:
         return {"status": "ok", "offers": 0}
 
@@ -1503,6 +1525,32 @@ def _paid_by_id(lid, team):
         return {}
 
 
+def _listing_backoff(store):
+    """playerMaster ids we should stop trying to list for now, and until when.
+
+    Re-listing every review is right when a listing merely lapsed, and wrong
+    when LaLiga is refusing the player — a cap on simultaneous listings, say.
+    Without this the hourly retry would hammer a refusal forever.
+
+    The wait doubles per consecutive refusal and is capped, and one confirmed
+    listing clears the record entirely.
+    """
+    strikes = store.get_doc("listing_strikes", {}) or {}
+    if not strikes:
+        return {}
+    now, out = utcnow(), {}
+    for pid, row in strikes.items():
+        last = parse_iso((row or {}).get("last"))
+        count = int((row or {}).get("count") or 0)
+        if last is None or count <= 0:
+            continue
+        wait = min(2 ** count, LISTING_BACKOFF_MAX_HOURS)
+        until = last + timedelta(hours=wait)
+        if until > now:
+            out[pid] = {"until": to_iso(until), "veces": count}
+    return out
+
+
 def _reconcile_listings(store, market):
     """Did the listings we sent actually land? Answered by a read we already made.
 
@@ -1523,18 +1571,29 @@ def _reconcile_listings(store, market):
     live = {str((r.get("playerMaster") or {}).get("id"))
             for r in market or [] if r.get("discr") == "marketPlayerTeam"}
     now, refused, confirmed = utcnow(), [], 0
+    strikes = store.get_doc("listing_strikes", {}) or {}
     for pid, row in list(attempts.items()):
         if pid in live:
             attempts.pop(pid, None)
+            strikes.pop(pid, None)      # it worked; the slate is clean
             confirmed += 1
             continue
         at = parse_iso((row or {}).get("at"))
-        if at is None or (now - at).total_seconds() < LISTING_GRACE_SECONDS:
+        age = None if at is None else (now - at).total_seconds()
+        if age is not None and age < LISTING_GRACE_SECONDS:
             continue          # too early to call it a refusal
         attempts.pop(pid, None)
+        if age is None or age > LISTING_VERDICT_MAX_SECONDS:
+            # Too old to tell a refusal from a listing that simply ran its
+            # course. Forget it rather than blame anybody.
+            continue
+        count = int((strikes.get(pid) or {}).get("count") or 0) + 1
+        strikes[pid] = {"count": count, "last": to_iso(now)}
         refused.append({"player_id": pid, "nombre": (row or {}).get("nombre"),
-                        "price": (row or {}).get("price")})
+                        "price": (row or {}).get("price"),
+                        "veces": count})
     store.put_doc("listing_attempts", attempts)
+    store.put_doc("listing_strikes", strikes)
     if refused:
         events.emit("error",
                     f"LaLiga no aceptó {len(refused)} anuncio(s)",
@@ -1605,6 +1664,10 @@ def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None,
     planned = offers_mod.plan_listings(team, market, best, sells,
                                        listed_since=days, expected=expected,
                                        paid_by_id=paid)
+    # Anyone LaLiga keeps refusing waits instead of being retried every hour.
+    backoff = _listing_backoff(get_storage())
+    if backoff:
+        planned = [r for r in planned if str(r.get("player_id")) not in backoff]
     # Why the others were left out. "Listed 0" over a squad of fifteen with none
     # on the market is a silent refusal, and a silent refusal is indistinguishable
     # from a switch being off — which cost a day of guessing between the two.
@@ -1616,13 +1679,31 @@ def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None,
             scheduler.LIST_SQUAD,
             {"league_id": lid, **row},
             execute_at=utcnow(),
-            # One listing attempt per player per day: if a listing lapses unsold,
-            # tomorrow's review puts him back up at a freshly computed reserve.
+            # One attempt per REVIEW, not per day.
+            #
+            # The key used to carry the calendar date, and a finished action
+            # keyed the same way is a permanent no-op — that is the anti-double
+            # -bid rule doing its job on the wrong thing. LaLiga's listings lapse
+            # when the market closes, so from that moment the squad was off the
+            # market and every hourly review that tried to put it back was
+            # silently swallowed until midnight. Simulated over one day: the
+            # whole squad listed at 00h, the listings lapsed at 14h, and the
+            # planner correctly queued all of them at 15h, 16h, 17h and every
+            # hour after — and not one reached the market. Ten hours a day with
+            # nothing for sale.
+            #
+            # Double-listing is already prevented twice and does not need this
+            # key to do it: the planner skips anyone currently on the market,
+            # and the executor re-checks against the tick's market snapshot.
             idempotency_key=f"list:{lid}:{row['player_team_id']}:"
-                            f"{date.today().isoformat()}",
-            expires_at=utcnow() + timedelta(hours=12))
+                            f"{utcnow().strftime('%Y-%m-%dT%H')}",
+            # Short: if this attempt does not run within the hour, the next
+            # review plans a fresh one at a freshly computed reserve. A stale
+            # listing action firing hours late would use yesterday's price.
+            expires_at=utcnow() + timedelta(hours=1))
         queued.append({**row, "why": explain.listing(row)})
-    return {"mode": "on", "listed": queued, "left_out": left_out}
+    return {"mode": "on", "listed": queued, "left_out": left_out,
+            "en_espera": backoff}
 
 
 def run_review(ctx, force=False):
