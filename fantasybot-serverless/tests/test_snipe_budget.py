@@ -90,7 +90,8 @@ class SnipeOutcomes(StorageTestCase):
         res = bidding.snipe("L", "m1", 11_000_000, client=client,
                             budget_seconds=10, log=lambda m: None)
         self.assertEqual(res["status"], "bid", "competition forces a move")
-        self.assertEqual(client.bids[0]["amount"], 10_300_000)
+        self.assertEqual(client.bids[0]["amount"], 10_000_000 + round(
+            10_000_000 * bidding.contested_margin()))
 
     def test_cap_is_never_exceeded(self):
         close = utcnow() + timedelta(minutes=10)
@@ -99,6 +100,18 @@ class SnipeOutcomes(StorageTestCase):
         bidding.snipe("L", "m1", 10_050_000, client=client,
                       budget_seconds=10, log=lambda m: None)
         self.assertEqual(client.bids[0]["amount"], 10_050_000)
+
+    def test_a_contested_auction_is_fought_up_to_the_ceiling(self):
+        """The planner sets max_bid to the asking price and the ceiling above
+        it. Capped at max_bid, the contested bid was the price plus nothing."""
+        close = utcnow() + timedelta(minutes=10)
+        client = FakeClient([listing("m1", close.isoformat(),
+                                     value=10_000_000, bids=2)])
+        bidding.snipe("L", "m1", 10_000_000, ceiling=11_000_000, client=client,
+                      budget_seconds=10, log=lambda m: None)
+        amount = client.bids[0]["amount"]
+        self.assertGreater(amount, 10_000_010)
+        self.assertLessEqual(amount, 11_000_000)
 
     def test_our_existing_bid_stops_it_before_anything_is_sent(self):
         """It no longer walks away — it guards — but it still sends nothing.

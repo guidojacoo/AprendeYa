@@ -112,6 +112,9 @@ class PlanListings(unittest.TestCase):
 
 
 class EvaluateOffers(unittest.TestCase):
+    # These offers name no bidder, so they are LaLiga's own. One under the bar
+    # is HELD, not declined — never accepted is what these tests pin; a rival's
+    # lowball being declined is pinned in test_selling_on_its_own.
     def _decide(self, offer_money, *, in_xi=False, value=10_000_000):
         team = {"players": [player("p1", "pt-1", value=value)]}
         market = [listing_row("p1", offer_list=[{"id": "o1", "money": offer_money}],
@@ -129,12 +132,12 @@ class EvaluateOffers(unittest.TestCase):
 
     def test_an_offer_one_euro_short_is_declined(self):
         reserve = offers.reserve_price(player("p1", "pt-1"), set(), set())
-        self.assertEqual(self._decide(reserve - 1)["action"], offers.DECLINE)
+        self.assertEqual(self._decide(reserve - 1)["action"], offers.HOLD)
 
     def test_a_starter_is_not_sold_at_a_bench_price(self):
         reserve = offers.reserve_price(player("p1", "pt-1"), set(), set())
         self.assertEqual(self._decide(reserve, in_xi=True)["action"],
-                         offers.DECLINE)
+                         offers.HOLD)
 
     def test_a_starter_goes_for_a_real_premium(self):
         self.assertEqual(self._decide(14_000_000, in_xi=True)["action"],
@@ -183,7 +186,7 @@ class EvaluateOffers(unittest.TestCase):
         market = [listing_row("p1", offer_list=[{"id": "o1", "money": 1}],
                               value=0)]
         self.assertEqual(offers.evaluate_offers(team, market)[0]["action"],
-                         offers.DECLINE)
+                         offers.HOLD)
 
 
 class ReserveMap(unittest.TestCase):
@@ -206,11 +209,11 @@ class ReserveMap(unittest.TestCase):
         # and accept. The cached reserve says he is a starter.
         decided = offers.evaluate_offers(team, market,
                                          reserves={"p1": 14_000_000})
-        self.assertEqual(decided[0]["action"], offers.DECLINE)
+        self.assertEqual(decided[0]["action"], offers.HOLD)
         self.assertEqual(decided[0]["reserve"], 14_000_000)
 
     def test_a_player_missing_from_the_cache_is_never_given_away(self):
         team = {"players": [player("p1")]}
         market = [listing_row("p1", offer_list=[{"id": "o1", "money": 1}])]
         decided = offers.evaluate_offers(team, market, reserves={})
-        self.assertEqual(decided[0]["action"], offers.DECLINE)
+        self.assertEqual(decided[0]["action"], offers.HOLD)

@@ -240,6 +240,19 @@ class FantasyClient:
         return self.post(self._cmp(f"/league/{league_id}/market/sell?x-lang=es"),
                          {"playerId": player_id, "salePrice": sale_price})
 
+    def player_offers(self, league_id, player_team_id):
+        """The offers received for one of OUR listed players.
+
+        The market row does not carry them. It carries `numberOfOffers` — a
+        count — and nothing else, which is why a season of LaLiga's daily offers
+        went by without the bot ever seeing one: it looked for an `offers` list
+        on the row that LaLiga never sends. The offers themselves hang off the
+        roster slot (playerTeamId); `/market/{id}/offer` is POST-only and
+        answers 405 to a GET.
+        """
+        return self.get(self._cmp(
+            f"/league/{league_id}/playerTeam/{player_team_id}/offer?x-lang=es"))
+
     def accept_offer(self, league_id, market_id, offer_id, money):
         return self.post(self._cmp(
             f"/league/{league_id}/market/{market_id}/offer/{offer_id}/accept?x-lang=es"),
@@ -250,24 +263,47 @@ class FantasyClient:
             f"/league/{league_id}/market/{market_id}/offer/{offer_id}/reject?x-lang=es"))
 
     # --- writes: buyout clauses ---
-    def pay_buyout_clause(self, league_id, player_id, amount):
-        """Buyout: pays the release clause of another manager's player."""
-        return self.post(self._cmp(
-            f"/league/{league_id}/buyout/{player_id}/pay?x-lang=es"),
-            {"buyoutClauseToPay": amount})
+    def pay_buyout_clause(self, league_id, player_team_id, amount):
+        """Buyout: pays the release clause of another manager's player.
 
-    def increase_buyout_clause(self, league_id, player_team_id, amount):
-        """Raises the clause of one of your players to protect them.
-
-        Keyed on the playerTeamId (your roster-slot id), NOT the playerMaster id
-        — the same rule `sell_player` and `shield_player` follow, and for the
-        same reason: these act on a slot in YOUR squad, not on a footballer in
-        the abstract. Sent with the playerMaster id it answers 404 Not Found,
-        which is what it did on the first live attempt.
+        Keyed on the ROSTER SLOT (his playerTeamId in the rival's squad), not on
+        the footballer: the same rule every write on a squad slot follows. With
+        the playerMaster id in the path the call can never land — which is how a
+        bot with clauses switched on never paid one.
         """
         return self.post(self._cmp(
-            f"/league/{league_id}/buyout/{player_team_id}/increase?x-lang=es"),
-            {"buyoutClause": amount})
+            f"/league/{league_id}/buyout/{player_team_id}/pay?x-lang=es"),
+            {"buyoutClauseToPay": amount})
+
+    # What the game multiplies a clause rise by: pay X and the clause goes up by
+    # CLAUSE_FACTOR * X. Measured, not guessed: paying 8,555 raised a clause by
+    # 17,110.
+    CLAUSE_FACTOR = 2
+
+    def increase_buyout_clause(self, league_id, player_team_id, value_to_increase):
+        """Raise the clause of one of ours by paying `value_to_increase`.
+
+        The clause rises by CLAUSE_FACTOR times what is paid. The route is
+        `PUT /buyout/player` with the slot id in the body — `/buyout/{id}/increase`
+        does not exist, so every raise sent there failed before a euro moved.
+        """
+        return self.put(self._cmp(f"/league/{league_id}/buyout/player?x-lang=es"),
+                        {"playerId": player_team_id, "factor": self.CLAUSE_FACTOR,
+                         "valueToIncrease": int(value_to_increase)})
+
+    # --- daily reward: free money once a day, per league ---
+    def check_daily_reward(self, league_id, team_id):
+        """{"teamId", "dailyRewardsRedeemed"} while today's is unclaimed; LaLiga
+        answers 400 (050.01.04) once it has been taken."""
+        return self.get(self._cmp(
+            f"/league/{league_id}/team/{team_id}/check-daily-reward?x-lang=es"))
+
+    def claim_daily_reward(self, league_id, team_id):
+        """Claim today's reward (100k in a private league). The path stops at the
+        league — the team travels in the body — and the advert is a flag."""
+        return self.post(self._cmp(f"/league/{league_id}/team/daily-reward?x-lang=es"),
+                         {"rewardedAdType": "dailyreward", "rewardedAd": 1,
+                          "teamId": str(team_id)})
 
     # --- shield (blindaje): protect a player from a rival's buyout clause ---
     def check_shield(self, league_id, player_team_id):

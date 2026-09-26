@@ -82,7 +82,22 @@ def cap_against_rivals(computed_cap, value, richest_rival_cash):
     return max(floor, min(computed_cap, ceiling))
 
 
-def decide(value, other_bids, seconds_left, max_bid, final=DEFAULT_FINAL):
+def contested_margin():
+    """How far above value to go when the auction is contested — the mode's call.
+
+    Sealed auctions are won by the highest number, and losing one by a hundred
+    thousand costs the whole player. The ceiling still bounds it.
+    """
+    try:
+        from . import modes
+        got = modes.knob("contested_margin")
+        return float(got) if got is not None else CONTESTED_MARGIN_PCT
+    except Exception:                            # noqa: BLE001
+        return CONTESTED_MARGIN_PCT
+
+
+def decide(value, other_bids, seconds_left, max_bid, final=DEFAULT_FINAL,
+           margin=None):
     """How much to bid NOW, or None to wait — never an amount LaLiga refuses.
 
     - other_bids > 0  → competition: value + margin, capped at max_bid.
@@ -99,7 +114,8 @@ def decide(value, other_bids, seconds_left, max_bid, final=DEFAULT_FINAL):
     if max_bid < value:
         return None
     if other_bids > 0:
-        competitive = value + max(UNCONTESTED_CUSHION, round(value * CONTESTED_MARGIN_PCT))
+        pct = CONTESTED_MARGIN_PCT if margin is None else margin
+        competitive = value + max(UNCONTESTED_CUSHION, round(value * pct))
         return max(value, min(max_bid, competitive))
     if seconds_left <= final:
         return max(value, min(max_bid, value + UNCONTESTED_CUSHION))
@@ -199,7 +215,7 @@ def guard_bid(row, mine, ceiling, value=None):
                     num((row.get("playerMaster") or {}).get("marketValue")))
     if not value:
         return None
-    target = decide(value, rivals, 0, ceiling)
+    target = decide(value, rivals, 0, ceiling, margin=contested_margin())
     if target is None:
         return None            # the ceiling is under the value: no legal raise exists
     current = _bid_amount(mine)
@@ -375,8 +391,16 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
                         "nombre": nombre, "value": value, "max_bid": max_bid,
                         "ceiling": room}
         left = _seconds_left(close_iso)
-        other_bids = el.get("numberOfBids", 0)
-        amount = decide(value, other_bids, left, cap, final)
+        other_bids = int(num(el.get("numberOfBids", 0)))
+        # A contested auction is fought up to the planner's CEILING, not the
+        # asking price. Capped at `max_bid` — which the planner sets to the
+        # price itself — the "competitive" bid came out at exactly the value
+        # plus nothing, and the margin that is supposed to win it never
+        # applied. Without an explicit ceiling (the CLI) `max_bid` stays the cap.
+        fight = max(cap, ceiling) if ceiling is not None else cap
+        amount = decide(value, other_bids, left,
+                        fight if other_bids > 0 else cap, final,
+                        margin=contested_margin())
         if amount is not None:
             if dry_run:
                 log(f"[bid] {nombre}: WOULD BID {amount:,} "
@@ -405,7 +429,9 @@ def snipe(league_id, market_id, max_bid, value=None, final=DEFAULT_FINAL,
             if left <= last_call_seconds:
                 # No later call arrives before the close, so the watch cannot be
                 # handed back. Bid at the price the final window would have set.
-                amount = decide(value, other_bids, 0, cap, final)
+                amount = decide(value, other_bids, 0,
+                                fight if other_bids > 0 else cap, final,
+                                margin=contested_margin())
                 if amount is None:
                     return {"status": "closed", "market_id": market_id,
                             "nombre": nombre}

@@ -83,6 +83,9 @@ def _status(handler):
             "shield": config.AUTO_SHIELD,
             "raise_clause": config.AUTO_RAISE_CLAUSE,
             "matchday": config.AUTO_MATCHDAY_LINEUP,
+            # Bidding with LaLiga's credit line, and the free daily reward.
+            "credit": config.AUTO_CREDIT,
+            "daily_reward": config.AUTO_DAILY_REWARD,
         },
         "last_execution": last,
         "executions": executions,

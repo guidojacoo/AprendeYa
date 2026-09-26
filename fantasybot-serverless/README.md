@@ -74,7 +74,7 @@ python -m fantasybot scout --team        # full squad scouting audit
 python -m fantasybot sell <playerId> <price>     # list a player for sale
 python -m fantasybot bid <marketId> <amount>     # bid on a market player
 python -m fantasybot cancel-bid <marketId> <bidId>
-python -m fantasybot clause <playerId> <amount>  # pay a buyout clause
+python -m fantasybot clause <playerTeamId> <amount>  # pay a buyout clause (the slot id)
 python -m fantasybot bid-plan <marketId> <max>   # schedule a last-minute bid
 python -m fantasybot bid-run                      # run the bid plan (fired by the cron)
 python -m fantasybot watch [--run|--hermes]       # live monitoring UI
@@ -153,6 +153,30 @@ just shows the plan.
 > This applies to the **deterministic agent** (`fantasybot agent`). When it's
 > piloted by **Hermes** (LLM), the autonomy for buyouts and sales is configured in
 > `hermes/USER.md` (default: automatic, with judgment).
+
+### What the serverless bot does on its own
+
+Every tick (every minute) and every review (every 20 minutes, plus on the spot
+after a sale, a clausulazo or new LaLiga listings):
+
+- **Sells, not just lists.** The whole squad stands on the market. LaLiga's row
+  only says `numberOfOffers`; the offers are read from each player's slot
+  (`GET /league/{id}/playerTeam/{slot}/offer`) and accepted against what the bot
+  *takes* for him — about value for the bench, a premium for the eleven — not
+  against the ask, which LaLiga forces above value. LaLiga's own daily offer
+  under that floor is held, never declined.
+- **Bids with real buying power.** Cash plus LaLiga's credit line (a squad may
+  bid up to cash + 20% of its value), but only what the bench can repay, only
+  when two daily offers fit before the next gameweek, and only once LaLiga's
+  offers have been seen arriving. A gameweek that starts negative scores zero,
+  so a negative bank sells — harder as kick-off nears — until it is back above
+  zero. Contested auctions are fought up to the planned ceiling.
+- **Clausulazos on every rival squad**, not only on listed players, valued like
+  any signing, paid on the slot id the moment lock, shield and LaLiga's
+  pre-gameweek window allow — and when the bank is short, the bench players who
+  score least are sold to fund the best one.
+- **Collects the daily reward** and raises its own exposed clauses (pay X, the
+  clause rises 2X).
 
 ## Automation (so it connects on its own)
 

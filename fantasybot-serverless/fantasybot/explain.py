@@ -157,23 +157,36 @@ def listing(row):
 
 
 def offer(decision):
-    """Why an offer was taken or turned down."""
+    """Why an offer was taken, held or turned down."""
     name = decision.get("nombre") or "el jugador"
-    amount, reserve = decision.get("amount"), decision.get("reserve")
-    amount_txt, reserve_txt = _m(amount), _m(reserve)
+    amount = decision.get("amount")
+    floor = decision.get("floor") or decision.get("reserve")
+    amount_txt, floor_txt = _m(amount), _m(floor)
+    who = "LaLiga" if decision.get("de_laliga") else (
+        decision.get("comprador") or "un rival")
     if decision.get("action") == "accept":
+        if decision.get("por_deuda"):
+            return _join([f"Acepto {amount_txt} de {who} por {name}.",
+                          decision.get("por_deuda")])
         parts = [f"Acepto{(' ' + amount_txt) if amount_txt else ' la oferta'} "
-                 f"por {name}"
-                 + (f": supera su reserva de {reserve_txt}." if reserve_txt
-                    else ".")]
+                 f"de {who} por {name}"
+                 + (f": supera mi mínimo de {floor_txt}." if floor_txt else ".")]
+        if decision.get("floor_why") and not decision.get("in_xi"):
+            parts.append(f"Motivo del mínimo: {decision['floor_why']}.")
         if decision.get("in_xi"):
             parts.append("Era titular, así que me pagaron la prima que pedía.")
         return _join(parts)
+    if decision.get("action") == "hold":
+        return (f"Dejo en pie la oferta de LaLiga por {name}"
+                + (f" ({amount_txt})" if amount_txt else "")
+                + (f": no llega a mi mínimo de {floor_txt}, pero no la rechazo "
+                   f"— si necesito caja, la tomo." if floor_txt else "."))
     head = f"Rechazo{(' ' + amount_txt) if amount_txt else ' la oferta'} por {name}"
-    if "outbid" in str(decision.get("reason", "")):
+    reason = str(decision.get("reason", ""))
+    if "outbid" in reason or "mejor" in reason:
         return f"{head}: hay otra oferta mejor sobre la mesa."
-    parts = [head + (f": está por debajo de su reserva de {reserve_txt}."
-                     if reserve_txt else ": no llega a su reserva.")]
+    parts = [head + (f": está por debajo de mi mínimo de {floor_txt}."
+                     if floor_txt else ": no llega a su reserva.")]
     if decision.get("in_xi"):
         parts.append("Es titular; para soltarlo tienen que pagar más.")
     return _join(parts)

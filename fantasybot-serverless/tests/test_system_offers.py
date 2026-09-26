@@ -117,7 +117,7 @@ class TheReserveIsAThresholdNotAPrice(StorageTestCase):
         best = {"payload": {"goalkeeper": None, "defender": ["p1"],
                             "midfield": [], "striker": []}}
         got = offers.evaluate_offers(team, market, best=best)[0]
-        self.assertEqual(got["action"], offers.DECLINE)
+        self.assertEqual(got["action"], offers.HOLD)
 
 
 if __name__ == "__main__":

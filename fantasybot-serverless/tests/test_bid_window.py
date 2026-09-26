@@ -70,7 +70,10 @@ class GuardingTheBid(StorageTestCase):
                             budget_seconds=5, log=lambda m: None)
         self.assertEqual(res["status"], "raised")
         self.assertEqual(res["previous"], 10_000_010)
-        self.assertEqual(client.modified[0]["money"], 10_300_000,
+        # The contested price is the mode's (6% in "equilibrio"), and it is the
+        # same number decide() picks for a fresh bid.
+        expected = 10_000_000 + round(10_000_000 * bidding.contested_margin())
+        self.assertEqual(client.modified[0]["money"], expected,
                          "the contested price, the same one decide() would pick")
 
     def test_it_never_raises_past_the_ceiling(self):

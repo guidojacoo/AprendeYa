@@ -213,7 +213,13 @@ TICK_LOCK_SECONDS = _int("TICK_LOCK_SECONDS", 90)
 
 # Cadences (seconds). The market scan is deterministic and cheap; the LLM pass is
 # neither, so it runs far less often.
-REVIEW_INTERVAL = _int("FANTASYBOT_REVIEW_INTERVAL", 3600)        # 1h
+# Twenty minutes, not an hour. The market is not hourly: LaLiga posts new
+# players, a rival lists one, an offer lands and turns into cash that should be
+# working before the next close. An hour between looks is an hour of that money
+# sitting still. On top of this cadence a review is also triggered on the spot
+# by the things that change the answer — a sale, a new LaLiga listing, a player
+# lost (see tick._wake_review).
+REVIEW_INTERVAL = _int("FANTASYBOT_REVIEW_INTERVAL", 1200)        # 20 min
 LLM_INTERVAL = _int("FANTASYBOT_LLM_INTERVAL", 86400)             # 1 day
 # When the bid actually goes in, as seconds before the listing closes.
 #
@@ -290,6 +296,18 @@ AUTO_SELLS = _flag("FANTASYBOT_AUTO_SELLS", True)
 # Decline offers below the reserve instead of letting them sit until the listing
 # expires. Keeps the decision ours rather than the platform's.
 DECLINE_LOWBALLS = _flag("FANTASYBOT_DECLINE_LOWBALLS", True)
+
+# Bid with LaLiga's credit, not only with cash. The game lets a squad bid up to
+# its cash plus DEBT_SHARE of its value; a team that STARTS a gameweek negative
+# scores zero, so the bot only borrows what the bench can repay, with at least
+# CREDIT_MIN_HOURS of LaLiga's daily offers before the next first kick-off, and
+# only once it has seen those offers arrive. See strategy/finance.py.
+AUTO_CREDIT = _flag("FANTASYBOT_AUTO_CREDIT", True)
+DEBT_SHARE = _float("FANTASYBOT_DEBT_SHARE", 0.20)
+CREDIT_MIN_HOURS = _int("FANTASYBOT_CREDIT_MIN_HOURS", 50)
+# Claim the daily reward (100k a day in a private league). Free money; the
+# advert is a flag the API takes on trust, exactly like the shield.
+AUTO_DAILY_REWARD = _flag("FANTASYBOT_AUTO_DAILY_REWARD", True)
 
 # --- LLM ---------------------------------------------------------------------
 # "none" keeps the bot 100% deterministic (and 100% free). Anything else turns on

@@ -206,9 +206,44 @@ def _execute_warm(ctx, action):
     return {"status": "ok", "warmed": got}
 
 
+def _clause_row(client, lid, p):
+    """His current row: clause, lock, shield — and the slot to pay on.
+
+    From his owner's squad when the plan knows the owner, which is every target
+    now: a clause is payable on anybody in a rival squad, not only on the few a
+    rival happens to list, so the market is not where he is. Plans queued before
+    that carried no owner and are still read from the market.
+    Returns None when he is not where the plan left him.
+    """
+    pid = str(p.get("player_id"))
+    owner = p.get("owner_team_id")
+    if owner:
+        for row in (client.team(lid, owner) or {}).get("players") or []:
+            if str((row.get("playerMaster") or {}).get("id")) == pid:
+                return {"clause": num(row.get("buyoutClause")) or None,
+                        "unlock": row.get("buyoutClauseLockedEndTime"),
+                        "shielded_until": (row.get("shieldedEndDate")
+                                           if row.get("isShielded") else None),
+                        "slot": row.get("playerTeamId")
+                        or p.get("player_team_id")}
+        return None
+    for row in client.market(lid) or []:
+        if row.get("discr") != "marketPlayerTeam":
+            continue
+        if str((row.get("playerMaster") or {}).get("id")) != pid:
+            continue
+        pt = row.get("playerTeam") or {}
+        return {"clause": num(pt.get("buyoutClause")) or None,
+                "unlock": pt.get("buyoutClauseLockedEndTime"),
+                "shielded_until": None,
+                "slot": pt.get("playerTeamId") or p.get("player_team_id")
+                or p.get("player_id")}
+    return None
+
+
 @scheduler.executor(scheduler.CLAUSE)
 def _execute_clause(ctx, action):
-    """Pay a rival's buyout clause the moment it unlocks.
+    """Pay a rival's buyout clause the moment it can be paid.
 
     The only irreversible spend the bot makes, so every assumption made when this
     was planned is re-checked against the live API before a euro moves. Planning
@@ -216,20 +251,31 @@ def _execute_clause(ctx, action):
 
       * we may already own him — somebody else's clause payment, or our own bid
       * the clause may have gone up (his owner raised it, or his value did)
+      * his owner may have shielded him, or sold him to somebody else
       * the balance may have gone down (a bid we won in the meantime)
 
     Anything that no longer holds means we stand down and say why. A skipped
-    clause costs nothing; an over-paid one cannot be undone.
+    clause costs nothing; an over-paid one cannot be undone. Waiting — a lock,
+    a shield, LaLiga's pre-gameweek window — is not standing down: the action
+    stays queued and fires when it opens.
     """
     p = action.get("payload") or {}
     if not config.AUTO_CLAUSES:
         return {"status": "skipped", "reason": "AUTO_CLAUSES is off"}
     if ctx.dry_run:
         return {"status": "skipped", "reason": "dry run"}
+    nombre = p.get("nombre")
+    # The window first, before a single request: LaLiga shuts clauses for the
+    # 24 hours before a gameweek starts, and asking during them is a refusal.
+    gw = (get_storage().get_doc("gameweek_start", {}) or {}).get("at")
+    is_open, reopens = clause_window(gw)
+    if not is_open:
+        return {"retry": True, "status": "window_closed", "nombre": nombre,
+                "reopens_at": to_iso(reopens)}
 
     client = ctx.get_client()
     lid, tid = league_ids(client)
-    player_id, nombre = p.get("player_id"), p.get("nombre")
+    player_id = p.get("player_id")
     max_pay = int(p.get("max_pay") or 0)
 
     team = client.team(lid, tid)
@@ -238,32 +284,24 @@ def _execute_clause(ctx, action):
     if str(player_id) in owned:
         return {"status": "already_owned", "nombre": nombre}
 
-    # Re-read the clause from the live market rather than trusting the plan.
-    current, unlock = None, None
-    for row in client.market(lid) or []:
-        if row.get("discr") != "marketPlayerTeam":
-            continue
-        if str((row.get("playerMaster") or {}).get("id")) != str(player_id):
-            continue
-        pt = row.get("playerTeam") or {}
-        current = num(pt.get("buyoutClause")) or None
-        unlock = pt.get("buyoutClauseLockedEndTime")
-        break
-    if current is None:
-        return {"status": "gone", "reason": "not on the market any more",
-                "nombre": nombre}
+    live = _clause_row(client, lid, p)
+    if live is None or live.get("clause") is None:
+        return {"status": "gone", "nombre": nombre,
+                "reason": "ya no está donde estaba (lo vendieron o lo ficharon)"}
 
-    current = int(current)
+    current = int(live["clause"])
     if current > max_pay:
         return {"status": "too_expensive", "nombre": nombre,
                 "clause": current, "max_pay": max_pay,
                 "reason": f"clause rose to {current:,}, cap was {max_pay:,}"}
 
-    unlock_at = parse_iso(unlock)
-    if unlock_at is not None and unlock_at > utcnow():
-        # Still locked. Not an error — come back when it opens.
-        return {"retry": True, "status": "locked", "nombre": nombre,
-                "unlocks_at": to_iso(unlock_at)}
+    for until, why in ((live.get("unlock"), "locked"),
+                       (live.get("shielded_until"), "shielded")):
+        at = parse_iso(until)
+        if at is not None and at > utcnow():
+            # Not an error — come back when it opens.
+            return {"retry": True, "status": why, "nombre": nombre,
+                    "unlocks_at": to_iso(at)}
 
     money = int(num(team.get("teamMoney")))
     if 0 < config.MAX_CLAUSE_SHARE < 1 and current > money * config.MAX_CLAUSE_SHARE:
@@ -281,13 +319,25 @@ def _execute_clause(ctx, action):
                 "reason": f"{current:,} would leave less than the "
                           f"{modes.cash_floor():,} reserve"}
 
-    resp = client.pay_buyout_clause(lid, player_id, current)
+    try:
+        resp = client.pay_buyout_clause(lid, live.get("slot"), current)
+    except Exception as e:                       # noqa: BLE001
+        if "030.01.17" in str(e):
+            # The window, told to us by LaLiga because nothing else did (no
+            # calendar yet). Wait for it; do not burn the action on it.
+            return {"retry": True, "status": "window_closed", "nombre": nombre,
+                    "reason": "LaLiga no deja pagar cláusulas 24h antes de "
+                              "la jornada"}
+        raise
     events.emit("clause", f"COMPRADO {nombre} por cláusula: {current:,} €",
                 detail={"was_planned_at": p.get("planned_clause"),
+                        "de": p.get("owner"),
                         "balance_after": money - current})
     notify.send(f"clause:{player_id}",
                 f"Fichado {nombre} por cláusula: {current:,} €. "
                 f"Saldo: {money - current:,} €", level="good")
+    # The squad just changed: rethink the eleven, the sales and the next buy.
+    _wake_review(f"clausulazo a {nombre}")
     return {"status": "paid", "nombre": nombre, "amount": current,
             "response": resp}
 
@@ -323,13 +373,21 @@ def _raise_brief(p):
 
 
 def _clause_cost_ratio():
-    """What a euro of clause costs us, as measured in production. None until then."""
+    """What a euro of clause costs us.
+
+    Measured in production when a raise has landed; until then the game's own
+    rule, which is known: pay X and the clause rises by CLAUSE_FACTOR * X. The
+    defence used to wait for a measurement that could never come — it probed a
+    route that does not exist, so no raise ever landed to measure.
+    """
+    from .api import FantasyClient
+    known = 1.0 / FantasyClient.CLAUSE_FACTOR
     try:
         doc = get_storage().get_doc("clause_cost_ratio", {}) or {}
         ratio = doc.get("ratio")
-        return float(ratio) if ratio else None
+        return float(ratio) if ratio else known
     except Exception:                            # noqa: BLE001
-        return None
+        return known
 
 
 @scheduler.executor(scheduler.RAISE_CLAUSE)
@@ -373,13 +431,15 @@ def _execute_raise_clause(ctx, action):
         return {"status": "already_safe", "nombre": p.get("nombre"),
                 "clause": before_clause, "target": target}
 
-    ratio = _clause_cost_ratio()
-    cost = clausedef.cost_of(before_clause, target, ratio)
+    # What to pay, not where to land: the clause rises by CLAUSE_FACTOR times
+    # the amount sent.
+    factor = getattr(client, "CLAUSE_FACTOR", 2) or 2
+    cost = -(-(target - before_clause) // factor)          # ceil
     if cost > before_money - modes.cash_floor():
         return {"status": "too_expensive", "nombre": p.get("nombre"),
                 "cost": cost, "money": before_money}
 
-    resp = client.increase_buyout_clause(lid, ptid, target)
+    resp = client.increase_buyout_clause(lid, ptid, cost)
 
     # What it actually cost. Read from the account, not from the response.
     after = client.team(lid, tid)
@@ -391,7 +451,8 @@ def _execute_raise_clause(ctx, action):
             break
     measured = clausedef.measure_ratio(before_money, after_money,
                                        before_clause, after_clause)
-    if measured is not None and ratio is None:
+    stored = (get_storage().get_doc("clause_cost_ratio", {}) or {}).get("ratio")
+    if measured is not None and not stored:
         get_storage().put_doc("clause_cost_ratio", {"ratio": measured,
                                                     "at": to_iso(utcnow()),
                                                     "from": p.get("nombre")})
@@ -745,7 +806,62 @@ def _react_to_squad_changes(report, team):
             "removed": removed, "added": list(changes.get("added") or [])}
 
 
-def _plan_bids(ctx, client, lid, team, report):
+def _committed_bids(market=None):
+    """Money already promised to auctions that have not closed yet.
+
+    Two places hold it: bids queued for a close, and bids already standing on
+    the market. Counted once per listing — a queued bid that has fired and is
+    now guarding its auction is in both. Returns (total, listing ids), and the
+    ids are how a later review knows not to plan the same signing twice.
+    """
+    covered, total = set(), 0
+    try:
+        queued = scheduler.pending(80)
+    except Exception:                            # noqa: BLE001
+        queued = []
+    for a in queued:
+        if a.get("type") != BID:
+            continue
+        p = a.get("payload") or {}
+        mid = str(p.get("market_id"))
+        if mid in covered:
+            continue
+        covered.add(mid)
+        total += int(num(p.get("max_bid")))
+    for row in market or []:
+        mine = bidding._our_bid(row)
+        mid = str(row.get("id"))
+        if mine and mid not in covered:
+            covered.add(mid)
+            total += int(num(bidding._bid_amount(mine)))
+    return total, covered
+
+
+def _team_value(team):
+    value = num(team.get("teamValue"))
+    if value:
+        return value
+    return sum(num((p.get("playerMaster") or {}).get("marketValue"))
+               for p in team.get("players") or [])
+
+
+def _buying_power(team, market=None):
+    """What the bot can spend right now: cash, credit it can repay, minus promises."""
+    from .strategy import finance
+    store = get_storage()
+    floors = store.get_doc("sale_floors", {}) or {}
+    gw = (store.get_doc("gameweek_start", {}) or {}).get("at")
+    committed, covered = _committed_bids(market)
+    power = finance.buying_power(
+        num(team.get("teamMoney")), _team_value(team),
+        finance.liquid_value(floors),
+        credit_use=modes.knob("credit_use") if config.AUTO_CREDIT else 0,
+        offers_proven=bool(store.get_doc("offers_seen", None)),
+        gameweek_start=gw, committed=committed, floor=modes.cash_floor())
+    return {**power, "gameweek_start": gw, "covered": sorted(covered)}
+
+
+def _plan_bids(ctx, client, lid, team, report, power=None):
     """Turn profitable flips into SCHEDULED bids instead of immediate ones.
 
     Bidding on sight shows your hand: rivals see the listing is contested and
@@ -786,10 +902,29 @@ def _plan_bids(ctx, client, lid, team, report):
     #
     # A rival's player is not lost by this: he goes to the clause pipeline,
     # ranked by the same points-per-euro measure.
-    candidates = [r for r in (report.get("upgrades") or [])
-                  if r.get("via") == SYSTEM_LISTING]
+    from .strategy import finance
+    power = power or _buying_power(team)
+    gw = power.get("gameweek_start")
+    covered = set(power.get("covered") or ())
+    # Affordability is decided HERE, against what can really be spent — cash,
+    # plus LaLiga's credit where the debt could be repaid before the next
+    # gameweek — and not against the cash alone that the review priced the
+    # market with. That is the difference between "no me alcanza" on every
+    # listing and a bot that bids with a 240M squad behind it.
+    candidates = []
+    for r in (report.get("upgrades") or []):
+        if r.get("via") != SYSTEM_LISTING:
+            continue
+        if str(r.get("market_id")) in covered:
+            continue          # already bid on, or already queued: money counted
+        price = int(num(r.get("buy_price")))
+        credit_ok = bool(power.get("credit")) and finance.credit_ok_for(
+            r.get("expires_at"), gw)
+        limit = power["spend_total"] if credit_ok else power["spend_cash"]
+        candidates.append({**r, "credit_ok": credit_ok,
+                           "affordable": 0 < price <= limit})
     ranked = [r for r in candidates if upgrades_mod.worth_signing(r)]
-    budget = int(num(team.get("teamMoney")))
+    budget = power["spend_total"]
     # Where the candidates went. "scheduled_bids: 0" with forty-four million in
     # the bank is a claim with nothing beside it: it reads the same whether the
     # market was empty, everyone was too expensive, or nobody was worth the
@@ -799,6 +934,7 @@ def _plan_bids(ctx, client, lid, team, report):
         "de otros managers (van por cláusula)": len(
             [r for r in (report.get("upgrades") or [])
              if r.get("via") != SYSTEM_LISTING]),
+        "ya pujados o en cola": len(covered),
         "no me alcanza": sum(1 for r in candidates if not r.get("affordable")),
         "suman muy poco": sum(1 for r in candidates
                               if r.get("affordable")
@@ -807,17 +943,25 @@ def _plan_bids(ctx, client, lid, team, report):
         "mejor gana": max((r.get("gain") or 0 for r in candidates), default=0),
         "hace falta ganar": modes.knob("min_gain"),
         "modo": modes.active(),
+        "caja": power["cash"],
+        "crédito usable": power["credit"],
+        "comprometido": power["committed"],
+        "poder de compra": power["spend_total"],
+        "sin crédito porque": power.get("why_no_credit"),
     }
     if ranked:
         plan = [{"market_id": r["market_id"], "nombre": r.get("nombre"),
                  "amount": int(num(r.get("buy_price"))),
                  "margin_pct": r.get("margin_pct"), "gain": r.get("gain"),
-                 "gain_per_million": r.get("gain_per_million")}
+                 "gain_per_million": r.get("gain_per_million"),
+                 "credit_ok": r.get("credit_ok"),
+                 "running_total": r.get("running_total")}
                 for r in upgrades_mod.best_plan(ranked, budget,
-                                                reserve=modes.cash_floor())]
+                                                cash_budget=power["spend_cash"])]
         funnel["entran en la caja"] = len(plan)
     else:
-        plan = execute_mod.plan_bids(client, lid, team)
+        plan = [b for b in execute_mod.plan_bids(client, lid, team)
+                if str(b.get("market_id")) not in covered]
         funnel["por margen (plan B)"] = len(plan)
     # Nobody in the league can outbid money they do not have. The richest rival's
     # estimated cash is the real ceiling on what any auction can cost us.
@@ -870,6 +1014,13 @@ def _plan_bids(ctx, client, lid, team, report):
         # the expensive one.
         roof = round(price * (1 + bidding.VALUE_DRIFT) * modes.knob("bid_ceiling"))
         ceiling = bidding.cap_against_rivals(max(price, roof), price, reach)
+        # Never past what can actually be spent on him, counting the signings
+        # planned ahead of him in this same pass: a raise into money that is
+        # promised elsewhere is a bid LaLiga refuses or a debt nobody planned.
+        limit = (power["spend_total"] if b.get("credit_ok")
+                 else power["spend_cash"])
+        before = int(num(b.get("running_total") or price)) - price
+        ceiling = max(price, min(ceiling, limit - before))
         try:
             row = scheduler.schedule_bid(lid, mid, price, close_at,
                                          nombre=b.get("nombre"),
@@ -892,7 +1043,7 @@ def _plan_bids(ctx, client, lid, team, report):
                             "precio": f"{price:,}", "techo": f"{ceiling:,}"},
                     status="plan")
     return {"mode": "snipe", "scheduled": scheduled, "skipped": skipped,
-            "funnel": funnel, "budget": budget}
+            "funnel": funnel, "budget": budget, "power": power}
 
 
 # Don't spend on a signing who will not play. Same floor the clause hunter uses.
@@ -921,7 +1072,7 @@ def _points_per_euro(candidate, price):
     return expected / max(1.0, price / 1_000_000.0)
 
 
-def _plan_gap_signings(ctx, lid, team, report):
+def _plan_gap_signings(ctx, lid, team, report, power=None):
     """Buy a player for a position we have nobody in.
 
     This is the difference between a bot that trades well and one that wins. The
@@ -949,7 +1100,10 @@ def _plan_gap_signings(ctx, lid, team, report):
         return {"mode": "off", "queued": [], "committed": 0,
                 "gaps": list(gaps)}
 
-    budget = max(0, int(num(team.get("teamMoney"))) - modes.cash_floor())
+    from .strategy import finance
+    power = power or _buying_power(team)
+    gw = power.get("gameweek_start")
+    covered = set(power.get("covered") or ())
     queued, skipped, committed = [], [], 0
     for pos in gaps:
         # Every candidate that clears the bar, then the best POINTS PER EURO
@@ -966,7 +1120,14 @@ def _plan_gap_signings(ctx, lid, team, report):
             prob = c.get("prob")
             if prob is not None and prob < MIN_SIGNING_PROB:
                 continue          # a benchwarmer does not fill a gap
+            if str(c.get("market_id")) in covered:
+                continue          # already bid on or queued
             cap = int(c.get("max_bid") or c.get("price") or 0)
+            # Borrowed money only where it can be repaid before the gameweek.
+            budget = (power["spend_total"]
+                      if power.get("credit") and finance.credit_ok_for(
+                          c.get("expires"), gw)
+                      else power["spend_cash"])
             if not cap or committed + cap > budget:
                 continue
             eligible.append((c, cap))
@@ -993,6 +1154,7 @@ def _plan_gap_signings(ctx, lid, team, report):
         why = explain.gap_signing(pos, c, cap, have=counts.get(pos),
                                   want=MIN_SQUAD.get(pos))
         queued.append({"pos": pos, "nombre": c.get("nombre"),
+                       "market_id": c.get("market_id"),
                        "max_bid": cap, "prob": c.get("prob"),
                        "closes": c.get("expires"), "why": why})
         events.emit("bid-plan", f"Fichaje programado: {c.get('nombre')} "
@@ -1047,6 +1209,16 @@ def _plan_clauses(ctx, lid, team, report):
     if 0 < share < 1:
         spendable = min(spendable, int(money * share))
 
+    gw = (get_storage().get_doc("gameweek_start", {}) or {}).get("at")
+    # Who already has a payment waiting. Re-queuing him would pay nobody twice —
+    # the executor re-reads ownership — but it would announce a new plan every
+    # review for a player the bot is already about to take.
+    try:
+        waiting = {str((a.get("payload") or {}).get("player_id"))
+                   for a in scheduler.pending(80)
+                   if a.get("type") == scheduler.CLAUSE}
+    except Exception:                            # noqa: BLE001
+        waiting = set()
     queued, skipped = [], []
     for t in targets:
         clause = int(t.get("clause") or 0)
@@ -1064,8 +1236,11 @@ def _plan_clauses(ctx, lid, team, report):
         # Is he worth WAITING for? The unlock instant is LaLiga's, not ours, so
         # the real question is whether to hold the money for him or spend it
         # today on the best thing actually available. A gameweek played with a
-        # worse eleven is not refunded when the signing finally lands.
-        if gain is not None and t.get("unlock"):
+        # worse eleven is not refunded when the signing finally lands. A clause
+        # that is already open involves no waiting, so there is nothing to weigh.
+        opens = parse_iso(t.get("unlock"))
+        if (gain is not None and t.get("unlock") and opens is not None
+                and opens > utcnow() + timedelta(minutes=5)):
             verdict = timing.worth_waiting(gain, best_now_gain, t["unlock"],
                                            kickoff)
             t = {**t, "timing": verdict}
@@ -1088,17 +1263,50 @@ def _plan_clauses(ctx, lid, team, report):
         if ctx.dry_run:
             skipped.append({**_target_brief(t), "why": "dry run"})
             continue
-        scheduler.schedule(
+        if str(t.get("player_id")) in waiting:
+            skipped.append({**_target_brief(t), "why": "ya está en cola"})
+            continue
+        # When it can actually be paid: his unlock, or now if that has passed,
+        # pushed past LaLiga's pre-gameweek window when it lands inside it. The
+        # best target goes first by a second per rank: they are paid one after
+        # another from the same balance, and the first one paid is the one that
+        # is sure to fit.
+        fire = max(unlock, utcnow())
+        is_open, reopens = clause_window(gw, now=fire)
+        if not is_open and reopens is not None:
+            fire = reopens + timedelta(seconds=5)
+        fire = fire + timedelta(seconds=len(queued))
+        # A clause that opens later is one plan, keyed on when it opens. One
+        # already open has no such instant — its "unlock" is now, which moves —
+        # so it is keyed on what LaLiga sent plus the hour: one attempt an hour
+        # at most, and a stand-down (a raised clause, a short bank) is retried
+        # an hour later instead of never.
+        if unlock > utcnow():
+            key = f"clause:{lid}:{t.get('player_id')}:{to_iso(unlock)}"
+        else:
+            key = (f"clause:{lid}:{t.get('player_id')}:"
+                   f"{t.get('lock_key') or t.get('unlock')}:"
+                   f"{utcnow().strftime('%Y%m%d%H')}")
+        row = scheduler.schedule(
             scheduler.CLAUSE,
             {"league_id": lid, "player_id": t.get("player_id"),
+             # The slot the payment is keyed on and whose squad he is in, so
+             # the executor re-reads him where he actually is.
+             "player_team_id": t.get("player_team_id"),
+             "owner_team_id": t.get("owner_team_id"),
+             "owner": t.get("owner"),
              "nombre": t.get("nombre"), "planned_clause": clause,
              # A small allowance so a routine value bump between planning and
              # payment does not cost us the player — but never past what we can
              # actually afford.
              "max_pay": min(spendable, round(clause * 1.10))},
-            execute_at=unlock,
-            idempotency_key=f"clause:{lid}:{t.get('player_id')}:{to_iso(unlock)}",
-            expires_at=unlock + timedelta(hours=6))
+            execute_at=fire,
+            idempotency_key=key,
+            expires_at=fire + timedelta(hours=6))
+        if (row or {}).get("status") not in (None, "pending"):
+            skipped.append({**_target_brief(t),
+                            "why": "ya lo intenté esta hora"})
+            continue
         state.complete_by_key(f"clause:{t.get('player_id')}")
         why = explain.clause(t, clause)
         queued.append({**_target_brief(t), "unlock": to_iso(unlock), "why": why})
@@ -1113,7 +1321,8 @@ def _plan_clauses(ctx, lid, team, report):
 def _target_brief(t):
     return {"player_id": t.get("player_id"), "nombre": t.get("nombre"),
             "pos": t.get("pos"), "clause": t.get("clause"),
-            "prob": t.get("prob")}
+            "prob": t.get("prob"), "owner": t.get("owner"),
+            "gain": t.get("gain")}
 
 
 def _plan_clause_defense(ctx, lid, team, report):
@@ -1314,8 +1523,8 @@ def _check_sources(report):
             "form": form_stat}
 
 
-def _kickoffs(client):
-    """Upcoming kickoff times this gameweek, as aware datetimes.
+def _kickoffs(client, week=None):
+    """Kickoff times of a gameweek (the current one by default), as aware datetimes.
 
     Defensive on purpose: the calendar payload's date field has several plausible
     names and this is not worth crashing a review over. Anything unparseable is
@@ -1323,7 +1532,8 @@ def _kickoffs(client):
     lineup refresh does not run this week.
     """
     try:
-        fixtures = client.calendar() or []
+        fixtures = (client.calendar(week) if week is not None
+                    else client.calendar()) or []
     except Exception:
         return []
     out = []
@@ -1336,6 +1546,54 @@ def _kickoffs(client):
                 out.append(dt)
                 break
     return sorted(set(out))
+
+
+def _gameweek_start(client, report=None, now=None):
+    """The first kick-off of the next gameweek that has not started, as ISO.
+
+    The instant that decides two things at once: a balance still negative then
+    scores zero for the whole gameweek, and buyout clauses cannot be paid in the
+    24 hours before it. Read from LaLiga's own calendar first — the current
+    gameweek if it has not begun, the next one if it has — and from the scraped
+    fixture list only when the calendar says nothing.
+    """
+    now = now or utcnow()
+    try:
+        week = (client.current_week() or {}).get("weekNumber")
+    except Exception:                            # noqa: BLE001
+        week = None
+    if week is not None:
+        try:
+            week = int(week)
+        except (TypeError, ValueError):
+            week = None
+    for w in ((week, week + 1) if week is not None else ()):
+        kos = _kickoffs(client, w)
+        if kos and kos[0] > now:
+            return to_iso(kos[0]), "calendario"
+    iso = ((report or {}).get("matchday") or {}).get("gameweek_kickoff") \
+        if isinstance((report or {}).get("matchday"), dict) else None
+    at = parse_iso(iso)
+    if at is not None and at > now:
+        return to_iso(at), "futbolfantasy"
+    return None, None
+
+
+def clause_window(gameweek_start, now=None):
+    """Whether a buyout clause can be paid right now, and when that changes.
+
+    LaLiga shuts the window in the 24 hours before a gameweek's first kick-off
+    and reopens it at that kick-off (030.01.17 on the way in). Returns
+    (open, reopens_at): reopens_at is the kick-off while shut, None while open.
+    With no known kick-off there is no opinion: open.
+    """
+    start = parse_iso(gameweek_start)
+    now = now or utcnow()
+    if start is None:
+        return True, None
+    if start - timedelta(hours=24) <= now < start:
+        return False, start
+    return True, None
 
 
 def _plan_matchday_lineups(ctx, client, lid, tid):
@@ -1388,27 +1646,90 @@ def _queue_reminders(report, dry_run=False):
     return queued
 
 
-def handle_offers(ctx):
-    """Decide every open offer on our listed players. Runs on EVERY tick.
+def _wake_review(reason, now=None):
+    """Ask for a review NOW, because something just changed the answer.
 
-    Offers arrive and expire between reviews, so this cannot wait for the hourly
-    cycle. It is deliberately cheap: one market read plus the reserve prices the
-    last review cached, no lineup optimisation.
+    The cadence is a floor on how often the bot thinks, not the only time it
+    does. A sale puts money in the bank that should be bidding before the next
+    close; a new LaLiga listing is a player nobody has scored yet. Waiting for
+    the clock to come round wastes exactly the minutes that decide auctions.
+
+    Keyed to the five-minute slot, so a burst of triggers is one review.
     """
+    now = now or utcnow()
+    slot = now.replace(minute=now.minute - now.minute % 5, second=0,
+                       microsecond=0)
+    try:
+        scheduler.schedule(
+            REVIEW, {"reason": reason}, execute_at=now,
+            idempotency_key=f"review-wake:{slot.strftime('%Y%m%d%H%M')}",
+            expires_at=now + timedelta(minutes=15))
+        return True
+    except Exception:                            # noqa: BLE001
+        return False
+
+
+def _watch_new_listings(store, market):
+    """Notice when LaLiga puts new players up, and wake a review for them.
+
+    Returns the ids that were not there last time. The first read of a fresh
+    install has nothing to compare against, so it only remembers.
+    """
+    ids = sorted(str(r.get("id")) for r in market or []
+                 if r.get("id") is not None and bidding._is_laliga_listing(r))
+    before = store.get_doc("seen_system_listings", None)
+    if before is None or sorted(before) != ids:
+        store.put_doc("seen_system_listings", ids)
+    if before is None:
+        return []
+    fresh = sorted(set(ids) - set(before))
+    if fresh:
+        _wake_review(f"{len(fresh)} jugador(es) nuevo(s) de LaLiga")
+    return fresh
+
+
+def _live_money(client, tid, market=None):
+    """The balance right now, as cheaply as possible.
+
+    Our own listing rows carry `sellerTeam.teamMoney`, so a tick that already
+    read the market usually has it for free; otherwise one small read.
+    """
+    for row in market or []:
+        seller = row.get("sellerTeam") or {}
+        if seller.get("teamMoney") is not None and str(seller.get("id")) == str(tid):
+            return int(num(seller.get("teamMoney")))
+    try:
+        return int(num((client.team_money(tid) or {}).get("teamMoney")))
+    except Exception:                            # noqa: BLE001
+        return None
+
+
+def handle_offers(ctx):
+    """Sell. Runs on EVERY tick.
+
+    LaLiga's market row says how many offers a listing has and nothing more;
+    the offers themselves are read from the player's slot. Then each is decided
+    against what we TAKE for that player — not what we ask, which LaLiga forces
+    above value — and, when the bank is negative with a gameweek coming, against
+    the one rule that matters more than any price: a gameweek that starts in the
+    red scores zero.
+
+    Cheap on purpose: one market read, one request per listing that actually
+    has offers, and the prices the last review cached.
+    """
+    from .strategy import finance
     from .strategy import offers as offers_mod
 
     store = get_storage()
     reserves = store.get_doc("reserves", {}) or {}
-    if not reserves:
+    floors = store.get_doc("sale_floors", {}) or {}
+    if not reserves and not floors:
         return {"status": "skipped", "reason": "no reserves cached yet"}
     if not (config.AUTO_SELLS or config.DECLINE_LOWBALLS):
         return {"status": "skipped", "reason": "offer handling is off"}
 
     client = ctx.get_client()
-    lid, _tid = league_ids(client)
-    # The squad is read from the cached reserves, not from a fresh team() call:
-    # the reserves ARE the list of our players, and a market read alone is enough
-    # to see the offers. One request per tick instead of three.
+    lid, tid = league_ids(client)
     market = client.market(lid)
     # Free: the read is already here, and reconciling every tick rather than
     # every review is what keeps a verdict minutes old instead of an hour old —
@@ -1418,17 +1739,47 @@ def handle_offers(ctx):
         _reconcile_listings(store, market)
     except Exception:                            # noqa: BLE001
         pass          # bookkeeping never breaks the offer handling
+    try:
+        fresh = _watch_new_listings(store, market)
+    except Exception:                            # noqa: BLE001
+        fresh = []
+    # The offers, from where LaLiga actually keeps them.
+    polled = store.get_doc("offers_polled", {}) or {}
+    fetch = offers_mod.attach_offers(
+        client, lid, market, set(reserves) | set(floors),
+        slots={pid: (meta or {}).get("ptid") for pid, meta in floors.items()},
+        polled=polled, now_ts=time.time(),
+        out_of_time=lambda: ctx.out_of_time(margin=10))
+    if fetch.get("consultados"):
+        store.put_doc("offers_polled", polled)
     # What our own listings look like coming back. "Nobody sold" has three
     # causes that render identically — nothing of ours is up, our listings are
-    # up and nobody bid, or offers exist and we are not reading them — and only
-    # the third is a bug. This is what tells them apart.
-    shape = offers_mod.inspect_our_listings(market, reserves=reserves)
+    # up and nobody bid, or offers exist and we are not reading them.
+    shape = offers_mod.inspect_our_listings(market, reserves=reserves or floors)
+    shape["lectura_de_ofertas"] = fetch
     store.put_doc("listing_shape", shape)
-    decisions = offers_mod.evaluate_offers(None, market, reserves=reserves)
+    decisions = offers_mod.evaluate_offers(None, market,
+                                           reserves=reserves or None,
+                                           floors=floors or None)
     if not decisions:
-        return {"status": "ok", "offers": 0, "listings_seen": shape}
+        return {"status": "ok", "offers": 0, "listings_seen": shape,
+                "new_listings": len(fresh)}
+    # Proof that the sale channel works. The credit line waits for this: the
+    # bot does not borrow against a buyer it has never seen turn up — and the
+    # buyer a debt is repaid with is LaLiga's daily offer, not a friend's bid.
+    from_laliga = sum(1 for d in decisions if d.get("de_laliga"))
+    if from_laliga:
+        store.put_doc("offers_seen", {"at": to_iso(utcnow()),
+                                      "offers": len(decisions),
+                                      "de_laliga": from_laliga})
 
-    accepted, declined, skipped = [], [], []
+    money = _live_money(client, tid, market)
+    gw = (store.get_doc("gameweek_start", {}) or {}).get("at")
+    level = finance.pressure(money if money is not None else 0, gw)
+    if money is not None and level is not finance.CALM:
+        finance.settle_debt(decisions, money, level)
+
+    accepted, declined, held, skipped = [], [], [], []
     for d in decisions:
         d["why"] = explain.offer(d)
         if ctx.out_of_time():
@@ -1441,9 +1792,15 @@ def handle_offers(ctx):
                     continue
                 client.accept_offer(lid, d["market_id"], d["offer_id"], d["amount"])
                 events.emit("sell", f"VENDIDO {d['nombre']} por {d['amount']:,} €",
-                            detail={"why": d["why"]})
+                            detail={"why": d["why"],
+                                    "comprador": ("LaLiga" if d.get("de_laliga")
+                                                  else d.get("comprador") or "rival"),
+                                    "mínimo": f"{int(d.get('floor') or 0):,} €",
+                                    "valor": f"{int(d.get('value') or 0):,} €"})
                 notify.send(f"sold:{d['player_id']}", d["why"], level="good")
                 accepted.append(d)
+            elif d["action"] == offers_mod.HOLD:
+                held.append(d)
             elif config.DECLINE_LOWBALLS and not ctx.dry_run:
                 client.decline_offer(lid, d["market_id"], d["offer_id"])
                 declined.append(d)
@@ -1455,8 +1812,20 @@ def handle_offers(ctx):
             events.emit("error", f"Falló la oferta por {d.get('nombre')}: {e}",
                         status="error")
             skipped.append({**d, "error": str(e)})
+    if accepted:
+        # Money just landed. It should be bidding before the next close, not
+        # waiting for the clock to come round.
+        _wake_review(f"vendí {len(accepted)} jugador(es)")
+    after = None if money is None else money + sum(d["amount"] for d in accepted)
+    if level is not finance.CALM and after is not None and after < 0:
+        notify.send(f"debt:{(gw or '')[:10]}",
+                    f"Sigo en negativo ({after:,} €) y la jornada empieza "
+                    f"{('el ' + gw[:16].replace('T', ' ')) if gw else 'pronto'}. "
+                    f"Vendo en cuanto entren ofertas.", level="error")
     return {"status": "ok", "accepted": accepted, "declined": declined,
-            "skipped": skipped, "offers": len(decisions)}
+            "held": held, "skipped": skipped, "offers": len(decisions),
+            "money_before": money, "money_after": after, "pressure": level,
+            "new_listings": len(fresh), "read": fetch}
 
 
 def _listing_skips(team, market, planned):
@@ -1641,9 +2010,77 @@ def _store_reserves(client, lid, team, best, sells, report=None):
     reserves = offers_mod.reserve_map(team, best, sells, listed_since=days,
                                       expected=expected, paid_by_id=paid)
     store.put_doc("reserves", reserves)
+    # What we TAKE for each one, beside what we ask. Written together so the
+    # offer handler never judges an offer with one review's ask and another's
+    # floor.
+    store.put_doc("sale_floors", offers_mod.sale_floors(
+        team, best, sells, listed_since=days, expected=expected,
+        paid_by_id=paid, fund_ids=_fund_ids(team, report, best, expected)))
     if listing_check.get("refused"):
         store.put_doc("last_listing_refusals", listing_check["refused"])
     return market, days, expected, paid
+
+
+def _fund_ids(team, report, best=None, expected=None):
+    """playerMaster ids whose sale would pay for a signing that adds more.
+
+    `transfers` pairs every signing the bank cannot reach with the cheapest
+    sale that covers it, net of the points that sale costs. Those players are
+    for sale for a reason beyond themselves, so their floor drops: LaLiga's
+    offer at about value is a yes, because the signing it funds is worth more.
+
+    The best clause target the cash cannot reach is funded the same way, from
+    the bench: a clause needs cash in hand — LaLiga lends nothing for one — so
+    the bench players who score least are sold until it is there.
+    """
+    by_slot = {str(p.get("playerTeamId")): str((p.get("playerMaster") or {}).get("id"))
+               for p in (team or {}).get("players") or []}
+    out = set()
+    for t in ((report or {}).get("transfers") or [])[:3]:
+        pid = by_slot.get(str(t.get("player_team_id")))
+        if pid:
+            out.add(pid)
+    return out | _clause_funding(team, report, best, expected)
+
+
+def _clause_funding(team, report, best=None, expected=None):
+    """The bench players whose sale would pay the best clause the cash cannot."""
+    from .strategy import offers as offers_mod
+    from .strategy.lineup import payload_ids
+
+    if not (config.AUTO_CLAUSES and config.AUTO_EXECUTE):
+        return set()
+    cash = int(num((team or {}).get("teamMoney"))) - modes.cash_floor()
+    share = min(config.MAX_CLAUSE_SHARE, modes.knob("clause_share"))
+    bar = 2 * modes.knob("min_gain")
+    worth = [t for t in (report or {}).get("clause_targets") or []
+             if (t.get("gain") or 0) >= max(bar, 0.5)
+             and int(num(t.get("clause"))) > max(0, cash)]
+    if not worth:
+        return set()
+    t = max(worth, key=lambda r: (r.get("gain_per_million") or 0))
+    clause = int(num(t.get("clause")))
+    # The share fence is re-checked at payment, so the cash has to clear it too.
+    needed = max(clause, round(clause / share) if 0 < share < 1 else clause)
+    short = needed - max(0, cash)
+    xi = {str(i) for i in (payload_ids(best) if best else set())}
+    bench = []
+    for p in (team or {}).get("players") or []:
+        pm = p.get("playerMaster") or {}
+        ptid = str(p.get("playerTeamId") or pm.get("id"))
+        if ptid in xi:
+            continue
+        value = int(num(pm.get("marketValue")))
+        pts = (expected or {}).get(ptid) or 0
+        bench.append((pts, -value, str(pm.get("id")), value))
+    bench.sort()
+    out, raised = set(), 0
+    for _pts, _neg, pid, value in bench:
+        if raised >= short:
+            break
+        out.add(pid)
+        raised += round(value * offers_mod.ACCEPT_FUNDING)
+    return out if raised >= short else set()
 
 
 def _plan_listings(ctx, client, lid, team, best, sells, market=None, days=None,
@@ -1766,14 +2203,16 @@ def run_review(ctx, force=False):
         lineup_res = ({"status": "skipped", "reason": "autonomy off"}
                       if not (config.AUTO_EXECUTE and config.AUTO_LINEUP)
                       else _apply_best_lineup(ctx, client, lid, tid, team))
-        # Gaps first: an empty slot costs points every gameweek, which beats any
-        # flip margin. Whatever it commits is withheld from the flip budget so
-        # the same euros are not promised twice.
-        gaps_res = (_plan_gap_signings(ctx, lid, team, report)
-                    if _afford("gap_signings", 12) else {"committed": 0})
-        remaining = dict(team)
-        remaining["teamMoney"] = max(0, int(num(team.get("teamMoney")))
-                                     - gaps_res.get("committed", 0))
+        # The gameweek clock, read once and written down: the offer handler runs
+        # every minute and needs it to know how hard to sell when the bank is
+        # negative, and the clause planner needs it to know when LaLiga shuts
+        # the clause window.
+        try:
+            gw_at, gw_src = _gameweek_start(client, report, now=now)
+            store.put_doc("gameweek_start", {"at": gw_at, "source": gw_src,
+                                             "computed": to_iso(now)})
+        except Exception:                        # noqa: BLE001
+            pass
         best = None
         try:
             from .strategy import lineup as lineup_opt
@@ -1785,13 +2224,33 @@ def run_review(ctx, force=False):
         except ValueError:
             pass          # incomplete squad: reserves fall back to squad premiums
         # Always, before anything that can be dropped for time: these are what
-        # every tick uses to answer an offer.
+        # every tick uses to answer an offer — and what the credit line is
+        # measured against, so they come before anything that spends.
         try:
             market, days_listed, expected_pts, paid_for = _store_reserves(
                 client, lid, team, best, report.get("sells"), report)
         except Exception as e:                   # noqa: BLE001
             market, days_listed, expected_pts, paid_for = None, None, None, None
             skipped.append(f"reserves ({e})")
+        # What can really be spent: cash, the part of LaLiga's credit the bench
+        # can repay before the gameweek, minus bids already promised.
+        power = _buying_power(team, market)
+        # Gaps first: an empty slot costs points every gameweek, which beats any
+        # flip margin. Whatever it commits is withheld from the flip budget so
+        # the same euros are not promised twice.
+        gaps_res = (_plan_gap_signings(ctx, lid, team, report, power=power)
+                    if _afford("gap_signings", 12) else {"committed": 0})
+        remaining = dict(team)
+        remaining["teamMoney"] = max(0, int(num(team.get("teamMoney")))
+                                     - gaps_res.get("committed", 0))
+        gap_spend = int(gaps_res.get("committed", 0) or 0)
+        bid_power = {**power,
+                     "committed": power["committed"] + gap_spend,
+                     "spend_cash": max(0, power["spend_cash"] - gap_spend),
+                     "spend_total": max(0, power["spend_total"] - gap_spend),
+                     "covered": sorted(set(power.get("covered") or ()) | {
+                         str(q.get("market_id")) for q in
+                         gaps_res.get("queued") or [] if q.get("market_id")})}
         # Listing comes BEFORE the phases that spend. It is the one that brings
         # money in, it is the cheapest of them, and it is the one that had never
         # run: the review kept reaching its budget among the phases that buy and
@@ -1802,7 +2261,8 @@ def run_review(ctx, force=False):
                     if _afford("listings", 8) else {"mode": "out of time"})
         # Before planning anything new, retire what the rules no longer allow.
         offside = _cancel_offside_bids(client, lid, log=ctx.log)
-        bids_res = (_plan_bids(ctx, client, lid, remaining, report)
+        bids_res = (_plan_bids(ctx, client, lid, remaining, report,
+                               power=bid_power)
                     if _afford("bids", 10) else {"mode": "out of time"})
         if offside.get("cancelled"):
             bids_res = {**bids_res, "cancelled": offside["cancelled"]}
@@ -1913,6 +2373,19 @@ def _note_market_read(report):
     events.emit("note", title, detail=detail)
 
 
+def _finance_brief(bids_res):
+    store = get_storage()
+    power = dict((bids_res or {}).get("power") or {})
+    power.pop("covered", None)
+    try:
+        power["ofertas_vistas"] = store.get_doc("offers_seen", None)
+        power["recompensa_diaria"] = store.get_doc("daily_reward", None)
+        power["jornada"] = store.get_doc("gameweek_start", None)
+    except Exception:                            # noqa: BLE001
+        pass
+    return power
+
+
 def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
                shield=None, sources=None, gaps_res=None, skipped_phases=None,
                think_seconds=None, catchup=None, defense=None,
@@ -1958,6 +2431,10 @@ def _summarize(report, lineup_res, bids_res, listings=None, clauses=None,
         "clause_targets": (report.get("clause_targets") or [])[:5],
         "tasks": report.get("tasks") or [],
         "bids": bids_res,
+        # The money, whole: what is in the bank, what LaLiga would lend and how
+        # much of it the bot will use, what is already promised, and the clock
+        # the debt has to be repaid by.
+        "finance": _finance_brief(bids_res),
         "gap_signings": gaps_res or {},
         "listings": listings or {},
         "clauses": clauses or {},
@@ -2088,6 +2565,15 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
             except Exception as e:               # noqa: BLE001
                 summary["offers"] = {"status": "error", "error": str(e)}
 
+        # Free money, once a day. Costs nothing on every other tick of the day.
+        if mode != "sniper" and not ctx.out_of_time(margin=12):
+            try:
+                reward = claim_daily_reward(ctx)
+            except Exception as e:               # noqa: BLE001
+                reward = {"status": "error", "error": str(e)[:160]}
+            if reward:
+                summary["reward"] = reward
+
         # A sniper tick exists only to hit a close; it must not spend its seconds
         # on a market review.
         if "review" in summary:
@@ -2176,6 +2662,85 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
         return summary
 
 
+def _madrid_today(now=None):
+    """The date in Madrid, which is when LaLiga's daily counters reset."""
+    from .sources.matchday import SPAIN_TZ
+    return (now or utcnow()).astimezone(SPAIN_TZ).date().isoformat()
+
+
+# A reward that could not be claimed is asked about again after this long, not
+# on every tick: a broken route answering sixty times an hour helps nobody.
+REWARD_RETRY_SECONDS = 3600
+
+
+def claim_daily_reward(ctx, now=None):
+    """Claim LaLiga's daily reward once per Madrid day. None when nothing to do.
+
+    Check, claim, stamp. The stamp short-circuits the rest of the day at zero
+    requests, and a check that answers "already taken" (from the phone, say)
+    stamps too, so the bot never asks twice.
+    """
+    if not (config.AUTO_DAILY_REWARD and config.AUTO_EXECUTE) or ctx.dry_run:
+        return None
+    store = get_storage()
+    now = now or utcnow()
+    today = _madrid_today(now)
+    doc = store.get_doc("daily_reward", {}) or {}
+    if doc.get("day") == today and doc.get("status") in ("claimed", "already"):
+        return None
+    failed = parse_iso(doc.get("failed_at"))
+    if failed is not None and (now - failed).total_seconds() < REWARD_RETRY_SECONDS:
+        return None
+    client = ctx.get_client()
+    lid, tid = league_ids(client)
+    try:
+        chk = client.check_daily_reward(lid, tid) or {}
+    except Exception as e:                       # noqa: BLE001
+        if "050.01.04" in str(e) or getattr(e, "status", None) == 400:
+            store.put_doc("daily_reward", {"day": today, "status": "already"})
+            return {"status": "already_claimed"}
+        store.put_doc("daily_reward", {**doc, "failed_at": to_iso(now),
+                                       "error": str(e)[:160]})
+        return {"status": "error", "error": str(e)[:160]}
+    if int(num(chk.get("dailyRewardsRedeemed"))) > 0:
+        store.put_doc("daily_reward", {"day": today, "status": "already"})
+        return {"status": "already_claimed"}
+    before = _live_money(client, tid)
+    try:
+        client.claim_daily_reward(lid, tid)
+    except Exception as e:                       # noqa: BLE001
+        store.put_doc("daily_reward", {**doc, "failed_at": to_iso(now),
+                                       "error": str(e)[:160]})
+        return {"status": "error", "error": str(e)[:160]}
+    after = _live_money(client, tid)
+    gained = (after - before) if (before is not None and after is not None) else None
+    store.put_doc("daily_reward", {"day": today, "status": "claimed",
+                                   "amount": gained, "at": to_iso(now)})
+    events.emit("note", "Cobré la recompensa diaria"
+                        + (f": +{gained:,} €" if gained else ""),
+                detail={"caja": f"{after:,} €" if after is not None else "—"})
+    return {"status": "claimed", "amount": gained}
+
+
+def _slim_offers(offers):
+    """What a history needs from a tick's offer handling: who went, for what."""
+    if not isinstance(offers, dict):
+        return offers
+    keep = ("nombre", "amount", "floor", "reserve", "value", "de_laliga",
+            "comprador", "why", "in_xi")
+    out = {k: offers[k] for k in ("status", "reason", "offers", "pressure",
+                                  "money_before", "money_after",
+                                  "new_listings", "error") if k in offers}
+    for bucket in ("accepted", "declined", "held"):
+        rows = offers.get(bucket) or []
+        if rows:
+            out[bucket] = [{k: r.get(k) for k in keep} for r in rows[:10]]
+    read = offers.get("read")
+    if isinstance(read, dict) and read.get("consultados"):
+        out["read"] = {k: read.get(k) for k in ("consultados", "ofertas")}
+    return out
+
+
 # What is worth keeping in the executions table, per tick, forever.
 #
 # A tick runs sixty times an hour and each one writes a row here. The review's
@@ -2188,7 +2753,8 @@ def run(mode="tick", dry_run=False, force_review=False, log=print,
 # what broke. The analysis is a snapshot, not a log.
 _EXECUTION_KEEP = ("ok", "mode", "deploy", "duration_seconds", "error",
                    "traceback", "note", "degraded", "actions", "pending",
-                   "next_deadline", "sleep_seconds", "clock", "source")
+                   "next_deadline", "sleep_seconds", "clock", "source",
+                   "reward")
 _REVIEW_KEEP = ("status", "reason", "seconds", "think_seconds", "skipped",
                 "money", "scheduled_bids")
 
@@ -2196,6 +2762,10 @@ _REVIEW_KEEP = ("status", "reason", "seconds", "think_seconds", "skipped",
 def _slim(summary):
     """The execution row's summary: small, and the same shape every time."""
     out = {k: summary[k] for k in _EXECUTION_KEEP if k in summary}
+    # The page's "Ofertas recibidas" reads the last execution's offers, and they
+    # were never kept — the section could only ever be empty.
+    if summary.get("offers") is not None:
+        out["offers"] = _slim_offers(summary["offers"])
     review = summary.get("review")
     if isinstance(review, dict):
         kept = {k: review[k] for k in _REVIEW_KEEP if k in review}

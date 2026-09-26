@@ -194,6 +194,15 @@ jobs:
                                   pujas: {programadas: (.review.bids.scheduled | length?),
                                           embudo: .review.bids.funnel?,
                                           descartadas: .review.bids.skipped?},
+                                  clausulas: {programadas: (.review.clauses.queued | length?),
+                                              descartadas: (.review.clauses.skipped | length?)},
+                                  ventas: {ofertas: .offers.offers?,
+                                           leidas: .offers.read?,
+                                           vendidas: (.offers.accepted | length?),
+                                           en_pie: (.offers.held | length?),
+                                           presion: .offers.pressure?,
+                                           caja_despues: .offers.money_after?},
+                                  recompensa: .reward,
                                   skipped_phases: (.review.skipped // null),
                                   clock, error}' 2>/dev/null || echo "$BODY"
 

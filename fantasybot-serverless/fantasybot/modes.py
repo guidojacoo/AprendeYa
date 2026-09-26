@@ -62,15 +62,22 @@ MODES = {
         "clause_share": 0.60,
         # Cash that is never spent, in euros.
         #
-        # This existed as FANTASYBOT_CASH_RESERVE and defaulted to ZERO, which
-        # meant the only fence on spending was `clause_share` — a share of
-        # whatever is LEFT. That is not a floor: at 60% each clause leaves 40%,
-        # so four of them take eighty million down to two. Which is exactly what
-        # happened, while the selling side was broken and nothing came back in.
+        # It was ten million, to stop clauses draining the bank while the
+        # selling side was broken. It did stop that — by stopping everything:
+        # with 1.3M in the account and a 240M squad, every bid and every clause
+        # was "beyond what I can spend", and the bot sat on its hands all week.
         #
-        # A share cannot bound a sequence. Only an absolute number can, and its
-        # job is concrete: always be able to answer the next market close.
-        "cash_floor": 10_000_000,
+        # Idle cash scores nothing in this game, and the job the floor did —
+        # "always be able to answer the next close" — is done now by LaLiga's
+        # own credit line (see strategy/finance.py), which is fenced by what the
+        # bench can repay and by the gameweek clock, and by selling that
+        # actually works. FANTASYBOT_CASH_RESERVE still raises it.
+        "cash_floor": 0,
+        # How much of LaLiga's credit line (20% of squad value) bids may use.
+        "credit_use": 0.5,
+        # How far above value to bid when somebody else is in the auction.
+        # Losing a signing by a hundred thousand costs the whole player.
+        "contested_margin": 0.06,
     },
     "dinero": {
         "label": "Hacer caja",
@@ -91,10 +98,11 @@ MODES = {
         # A clause costs roughly 1.67x market value. That is a terrible entry
         # price for a trade, so this mode may barely use them.
         "clause_share": 0.30,
-        # Trading wants its capital working, not idle — but a trader with no
-        # cash cannot take the next opportunity either, which is the whole game
-        # here.
-        "cash_floor": 5_000_000,
+        # Trading wants its capital working, not idle. Its optionality is the
+        # credit line, and a trader borrows less of it: the margin is thin.
+        "cash_floor": 0,
+        "credit_use": 0.35,
+        "contested_margin": 0.03,
     },
     "puntos": {
         "label": "Todo a puntos",
@@ -112,9 +120,11 @@ MODES = {
         "bid_ceiling": 1.20,
         # One extraordinary player can be most of the bank.
         "clause_share": 0.85,
-        # Spend aggressively, but never literally broke: an account at zero
-        # cannot bid at a close, and missing the close costs the whole player.
-        "cash_floor": 3_000_000,
+        # Spend everything, and borrow everything the bench can repay: the
+        # gameweek clock and the repayment plan still fence it.
+        "cash_floor": 0,
+        "credit_use": 1.0,
+        "contested_margin": 0.12,
     },
 }
 

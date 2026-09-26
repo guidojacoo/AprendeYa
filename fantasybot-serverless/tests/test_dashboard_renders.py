@@ -97,6 +97,45 @@ class TheDashboardRenders(unittest.TestCase):
                           "ofertas_totales": 0, "claves_de_oferta_vistas": [],
                           "claves_de_la_fila": []}}})
 
+    def test_the_money_box_in_debt_with_credit(self):
+        """Negative bank before a gameweek, credit in use, offers held."""
+        self._render({
+            "ok": True, "now": "2026-09-26T10:00:00+00:00",
+            "offers": {"status": "ok", "pressure": "urgente",
+                       "money_before": -3_000_000, "money_after": 1_200_000,
+                       "accepted": [{"nombre": "A", "amount": 4_200_000,
+                                     "why": "sale", "de_laliga": True}],
+                       "held": [{"nombre": "B", "amount": 900_000,
+                                 "why": "en pie", "de_laliga": True}]},
+            "report": {"finance": {
+                "cash": -3_000_000, "credit_line": 48_000_000,
+                "credit": 20_000_000, "committed": 5_000_000,
+                "spend_cash": 0, "spend_total": 12_000_000,
+                "hours_to_gameweek": 41.5, "why_no_credit": None,
+                "jornada": {"at": "2026-09-28T19:00:00+00:00",
+                            "source": "calendario"},
+                "ofertas_vistas": {"at": "2026-09-26T09:00:00+00:00",
+                                   "offers": 3},
+                "recompensa_diaria": {"status": "claimed", "amount": 100_000}},
+                "listing_shape": {"anuncios_nuestros": 20, "con_ofertas": 3,
+                                  "ofertas_totales": 3,
+                                  "ofertas_segun_laliga": 3,
+                                  "lectura_de_ofertas": {"consultados": 3,
+                                                         "ofertas": 3,
+                                                         "errores": []},
+                                  "claves_de_oferta_vistas": ["numberOfOffers"],
+                                  "claves_de_la_fila": ["id"]}}})
+
+    def test_the_money_box_without_credit(self):
+        self._render({"ok": True, "now": "2026-09-26T10:00:00+00:00",
+                      "report": {"finance": {
+                          "cash": 1_260_777, "credit_line": 48_000_000,
+                          "credit": 0, "committed": 0, "spend_cash": 1_260_777,
+                          "spend_total": 1_260_777, "hours_to_gameweek": None,
+                          "why_no_credit": "todavía no vi llegar ninguna oferta",
+                          "jornada": {}, "ofertas_vistas": None,
+                          "recompensa_diaria": None}}})
+
     def test_a_full_report(self):
         """Every section with something in it."""
         self._render({

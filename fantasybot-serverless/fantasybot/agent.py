@@ -11,7 +11,7 @@ Returns a structured report. Firing the reminders (cronjobs) and the
 notifications are built on top (see README / next steps).
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from . import cache, config, modes, state
 from .matching import match_name, num, position_of
@@ -22,6 +22,7 @@ from .strategy import scoring
 from .strategy import depth
 from .strategy import upgrades
 from .strategy import shield as shield_mod
+from .strategy import raids
 from .sources.lineups import probable_lineups
 from .sources.market_trends import trends_index
 from .sources import form
@@ -166,6 +167,9 @@ def clause_targets(market, team, prob_index, upgrades_by_id=None):
         targets.append({
             "nombre": pm.get("nickname") or pm.get("name"),
             "player_id": pm["id"],
+            # The slot the payment is keyed on, and whose squad it is in.
+            "player_team_id": pt.get("playerTeamId"),
+            "owner_team_id": (el.get("sellerTeam") or {}).get("id"),
             "pos": pos,
             "clause": clause,
             "unlock": unlock,
@@ -191,6 +195,71 @@ def clause_targets(market, team, prob_index, upgrades_by_id=None):
                                 t.get("gain") or 0,
                                 t.get("prob") or 0), reverse=True)
     return targets
+
+
+def squad_clause_targets(client, lid, tid, team, best, prob_index,
+                         fixture_difficulty=None, form_index=None):
+    """Clause targets from every rival squad, valued like any signing.
+
+    Bounded twice: nobody whose clause is beyond what we could ever raise —
+    cash plus what the bench would sell for — and only the best few by a cheap
+    proxy get the full lineup valuation. Never fatal: a failure here leaves the
+    market-row targets exactly as they were.
+    """
+    try:
+        teams = raids.fetch_rival_squads(client, lid, tid)
+        owned = {str((p.get("playerMaster") or {}).get("id"))
+                 for p in team.get("players") or []}
+        xi = lineup_opt.payload_ids(best) if best else set()
+        bench = sum(num((p.get("playerMaster") or {}).get("marketValue"))
+                    for p in team.get("players") or []
+                    if str(p.get("playerTeamId")) not in {str(i) for i in xi})
+        reach = num(team.get("teamMoney")) + bench * 0.85
+        pool = [c for c in raids.candidates(teams, owned, prob_index,
+                                            max_clause=reach)
+                if c.get("prob") is None or c["prob"] >= MIN_CLAUSE_PROB]
+        pool = pool[:raids.MAX_EVALUATED]
+        if not pool:
+            return []
+        base = upgrades.squad_points(team, prob_index, fixture_difficulty,
+                                     form_index)
+        out = []
+        for c in pool:
+            card = c.pop("card", None) or {}
+            c.pop("_proxy", None)
+            gain = upgrades.gain_from(team, card, prob_index,
+                                      fixture_difficulty, base=base,
+                                      form_index=form_index)
+            c["gain"] = gain
+            c["gain_per_million"] = round(
+                gain / max(1.0, c["clause"] / 1_000_000.0), 3)
+            c["reason"] = _clause_reason(c["pos"], c)
+            c["via"] = "plantilla"
+            c["cheaper_via_bid"] = False
+            out.append(c)
+        return out
+    except Exception:                            # noqa: BLE001
+        return []
+
+
+def _merge_targets(market_targets, squad_targets):
+    """One list, one row per player: the squad read wins, the market adds its sale."""
+    by_id = {str(t.get("player_id")): dict(t) for t in squad_targets or []}
+    for t in market_targets or []:
+        key = str(t.get("player_id"))
+        if key in by_id:
+            for k in ("market_id", "sale_price", "sale_expires", "on_sale_at",
+                      "saving_vs_clause"):
+                if t.get(k) is not None:
+                    by_id[key][k] = t[k]
+        else:
+            by_id[key] = dict(t)
+    merged = list(by_id.values())
+    merged.sort(key=lambda t: (t.get("gain_per_million") is not None,
+                               t.get("gain_per_million") or 0,
+                               t.get("gain") or 0,
+                               t.get("prob") or 0), reverse=True)
+    return merged
 
 
 def _squad_census(team, market):
@@ -493,6 +562,11 @@ def review(client, days_to_matchday=None):
         market, team, prob_index,
         upgrades_by_id={str(u.get("player_id")): u for u in upgrade_list
                         if u.get("player_id") is not None})
+    # And every rival SQUAD, which is where clausulazos actually happen: the
+    # market only shows the few players a rival chose to list.
+    targets = _merge_targets(targets, squad_clause_targets(
+        client, lid, tid, team, best, prob_index,
+        fixture_difficulty if best is not None else None, form_index))
     reminders = []
     close = market_close(market)
     if close:
@@ -504,12 +578,18 @@ def review(client, days_to_matchday=None):
                 "event_at": close,
                 "message": "Market closes in 5 min: review bids and needs.",
             })
-    for t in targets:
+    now_utc = datetime.now(timezone.utc)
+    for t in targets[:5]:
         if t.get("cheaper_via_bid"):
             continue   # the recommended route is the OPEN SALE; a "prepare the
                        # buyout" alarm for the same player contradicts the task
         dt = _parse(t["unlock"])
-        if dt:
+        if dt and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        # Only a clause that OPENS later is worth an alarm. One already open is
+        # the planner's job right now, and an alarm for it would fire on every
+        # review, because "open since now" moves with the clock.
+        if dt and dt > now_utc + timedelta(seconds=90):
             reminders.append({
                 "key": f"clause:{t['player_id']}:{t['unlock']}",
                 "fire_at": (dt - timedelta(seconds=60)).isoformat(),
@@ -536,7 +616,9 @@ def review(client, days_to_matchday=None):
         reminders.append(lineup_rem)
     reminders.sort(key=lambda r: r["fire_at"])
 
-    _sync_tasks(gaps, targets, sells, lineup_changed)
+    # The best three, not all thirty: the bot pays these itself, and a task list
+    # a person cannot read to the end is one nobody reads.
+    _sync_tasks(gaps, targets[:3], sells, lineup_changed)
     state.save_reminders(reminders)
 
     # Rival cash is derived from the league's FULL transfer history — roughly a
@@ -580,7 +662,7 @@ def review(client, days_to_matchday=None):
         # field is a string: `f"{money:,}"` raises on one, silently.
         "money": num(team["teamMoney"]),
         "matchday": {"kickoff": kickoff, "days": days_to_matchday,
-                     "week": week_now},
+                     "week": week_now, "gameweek_kickoff": gw_kickoff},
         "lineup": lineup_section,
         "flips": flips,
         "market": market,

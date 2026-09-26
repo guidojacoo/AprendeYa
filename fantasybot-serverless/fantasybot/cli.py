@@ -812,8 +812,10 @@ def build_parser():
     cb.add_argument("bid_id")
     cb.set_defaults(func=cmd_cancel_bid)
 
-    cl = sub.add_parser("clause", help="pay a player's buyout clause (playerId amount)")
-    cl.add_argument("player_id")
+    cl = sub.add_parser("clause", help="pay a player's buyout clause "
+                                       "(playerTeamId amount: his slot in the "
+                                       "rival's squad, not his player id)")
+    cl.add_argument("player_id", metavar="player_team_id")
     cl.add_argument("amount", type=int)
     cl.set_defaults(func=cmd_clause)
 

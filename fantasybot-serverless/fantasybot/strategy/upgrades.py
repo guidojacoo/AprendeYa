@@ -302,12 +302,17 @@ def worth_signing(row):
     return row.get("gain", 0) >= modes.knob("min_gain")
 
 
-def best_plan(ranked, money, reserve=0, max_signings=3):
+def best_plan(ranked, money, reserve=0, max_signings=3, cash_budget=None):
     """Greedy pick under the budget: best value per euro first.
 
     Greedy is the right answer here and not a shortcut — this is a knapsack, and
     value-per-euro-first is its standard approximation. Exactness would buy
     nothing: the inputs are probabilities, not prices.
+
+    `cash_budget`, when given, is the part of `money` that is not borrowed. A
+    row marked `credit_ok: False` — an auction whose debt could not be repaid
+    before the next gameweek — must fit inside it, counting everything already
+    picked, because only cash is safe for it.
     """
     budget = max(0, int(num(money)) - int(num(reserve)))
     picked, spent = [], 0
@@ -316,6 +321,9 @@ def best_plan(ranked, money, reserve=0, max_signings=3):
             break
         price = int(num(row.get("buy_price")))
         if not worth_signing(row) or spent + price > budget:
+            continue
+        if (cash_budget is not None and row.get("credit_ok") is False
+                and spent + price > int(num(cash_budget))):
             continue
         picked.append({**row, "running_total": spent + price})
         spent += price

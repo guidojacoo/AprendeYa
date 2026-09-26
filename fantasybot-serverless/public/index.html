@@ -214,6 +214,11 @@
           así que lo que ves abajo se recalcula con el modo nuevo.</div>
         <div id="modes"></div>
         <span id="mode-note" class="note"></span></section>
+      <section><h2>Plata: caja, crédito y deuda</h2>
+        <div class="note">LaLiga deja pujar con tu caja + 20% del valor del
+          equipo. Si la jornada arranca en negativo, puntuás 0: por eso solo usa
+          crédito que los suplentes puedan devolver antes de la jornada.</div>
+        <div id="finance"></div></section>
       <section><h2>Alineación</h2><div id="lineup"></div></section>
       <section><h2>Estrategia</h2><div id="stance"></div></section>
       <section><h2>Tareas para vos</h2><div id="tasks"></div></section>
@@ -394,6 +399,47 @@ function render(d){
   $('last').textContent=when(last.started_at,true);
   $('last-note').textContent=last.started_at
     ?(ago(last.started_at)+' · '+(s.duration_seconds??'?')+'s'):'el scheduler no llamó aún';
+
+  /* plata: caja, crédito, deuda */
+  part('plata',()=>{
+    const fi=rep.finance||{}, off=d.offers||{};
+    const row=(cls,tag,txt,sub,right)=>
+      '<div class="row">'+(tag!=null?'<span class="tag '+cls+'">'+esc(tag)+'</span>':'')
+      +'<div class="m">'+esc(txt)+(sub?'<small>'+esc(sub)+'</small>':'')+'</div>'
+      +(right!=null?'<div class="right"><span class="num">'+esc(right)+'</span></div>':'')
+      +'</div>';
+    if(fi.cash===undefined){
+      $('finance').innerHTML='<div class="empty">Sin datos todavía — esperá una revisión.</div>';
+      return;
+    }
+    const jor=fi.jornada||{}, seen=fi.ofertas_vistas, rw=fi.recompensa_diaria||{};
+    const debt=fi.cash<0;
+    let out=row(debt?'bad':'ok',debt?'en negativo':'caja','Caja ahora',
+                debt?'tiene que volver a positivo antes de que arranque la jornada':'',
+                short(fi.cash));
+    out+=row(fi.credit?'ok':'idle',fi.credit?'activo':'sin crédito',
+             'Crédito que puede usar',
+             fi.credit?('de una línea de '+short(fi.credit_line)+' que da LaLiga')
+                      :(fi.why_no_credit||''),
+             short(fi.credit||0));
+    if(fi.committed) out+=row('warn','comprometido','Ya prometido a pujas abiertas','',short(fi.committed));
+    out+=row('ok','poder','Poder de compra real','caja + crédito seguro − pujas abiertas',
+             short(fi.spend_total||0));
+    out+=row(jor.at?'idle':'warn','jornada',
+             jor.at?('Empieza '+when(jor.at,true)):'No sé cuándo empieza la jornada',
+             jor.at?('fuente: '+(jor.source||'?')
+                     +(fi.hours_to_gameweek!=null?' · faltan '+Math.round(fi.hours_to_gameweek)+' h':'')):'',
+             null);
+    out+=row(seen?'ok':'warn',seen?'sí':'todavía no','Ofertas de LaLiga vistas',
+             seen?('última lectura '+ago(seen.at)):'hasta verlas no usa crédito',null);
+    if(off.pressure) out+=row('bad',off.pressure,'Vendiendo para salir del negativo',
+                              off.money_after!=null?'caja después: '+short(off.money_after):'',null);
+    out+=row(rw.status==='claimed'||rw.status==='already'?'ok':'idle','recompensa',
+             rw.status==='claimed'?('Cobrada hoy'+(rw.amount?' (+'+short(rw.amount)+')':''))
+               :rw.status==='already'?'Ya estaba cobrada hoy':'Recompensa diaria pendiente',
+             rw.error?('último error: '+rw.error):'',null);
+    $('finance').innerHTML=out;
+  });
 
   /* alineación */
   const f=rep.formation, lr=rep.lineup_result||{};
@@ -584,6 +630,12 @@ function render(d){
       +'</div></div>';
     let out=row(n?'ok':'bad', String(n), 'anuncios tuyos en el mercado',
                 n?'':'no hay nada publicado: el problema es la publicación, no la venta');
+    const said=sh.ofertas_segun_laliga, rd=sh.lectura_de_ofertas||{};
+    if(n&&said!==undefined)
+      out+=row(said?'ok':'idle', String(said||0), 'ofertas según LaLiga (numberOfOffers)',
+               said?('leídas del jugador: '+(rd.ofertas||0)
+                     +((rd.errores||[]).length?' · errores: '+rd.errores.length:''))
+                   :'publicado y todavía nadie ofertó');
     if(n){
       out+=row(tot?'ok':'warn', String(tot), 'ofertas recibidas en total',
                tot?(con+' jugador(es) con oferta')
@@ -603,11 +655,12 @@ function render(d){
   part('mercado',()=>{
     const off=d.offers||{};
     const rows=[...(off.accepted||[]).map(o=>[o,'ok','VENDIDO']),
+                ...(off.held||[]).map(o=>[o,'warn','en pie']),
                 ...(off.declined||[]).map(o=>[o,'bad','rechazada']),
                 ...(off.skipped||[]).map(o=>[o,'warn','en espera'])];
     list($('offers'),rows,([o,cls,label])=>
       '<div class="row"><span class="tag '+cls+'">'+label+'</span><div class="m"><b>'
-      +esc(o.nombre)+'</b><small>'+esc(o.reason||'')+(o.in_xi?' · titular':'')
+      +esc(o.nombre)+'</b><small>'+esc(o.why||o.reason||'')+(o.in_xi?' · titular':'')
       /* Quién puso la plata: la oferta diaria del propio mercado de LaLiga es
          el canal por el que de verdad se vende en una liga de amigos, y se ve
          distinto de la puja de un rival. */
@@ -977,6 +1030,8 @@ function render(d){
       +flag('Paga cláusulas',a.clauses)+flag('Blinda jugadores',a.shield)
       +flag('Sube cláusulas para protegerse',a.raise_clause)
       +flag('Realinea antes de cada partido',a.matchday)
+      +flag('Puja con crédito de LaLiga (repagable)',a.credit)
+      +flag('Cobra la recompensa diaria',a.daily_reward)
       +'<div class="row"><div class="m">LLM</div><div class="right">'
       +(llm.enabled?('<span class="tag ok">'+esc(llm.model||'on')+'</span>')
                    :'<span class="tag warn">apagado</span>')+'</div></div>'
